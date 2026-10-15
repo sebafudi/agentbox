@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agentbox hub</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --line: #e2e5ea; --text: #1d2330; --muted: #677085;
+    --accent: #2f6fde; --ok: #1f9d55; --warn: #c27c0e; --bad: #d23c3c; --chip: #eef1f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1218; --panel: #171b23; --line: #262c38; --text: #dfe4ee; --muted: #8b94a7;
+            --accent: #7aa7ff; --ok: #4cc38a; --warn: #e3a33b; --bad: #ff6b6b; --chip: #212734; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 20px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; margin-bottom: 16px; }
+  h1 { font-size: 22px; margin: 0; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 28px 0 10px; }
+  .meta { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+  button { font: inherit; font-size: 13px; color: var(--text); background: var(--chip); border: 1px solid var(--line);
+           border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
+  .top { display: flex; align-items: center; gap: 8px; }
+  .name { font-weight: 600; font-size: 16px; flex: 1; min-width: 0; }
+  .port { font: 13px ui-monospace, monospace; color: var(--muted); }
+  .about { color: var(--muted); font-size: 13px; margin: 6px 0 10px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--muted); }
+  .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+  .links { display: flex; flex-direction: column; gap: 6px; }
+  .link { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; min-width: 0; font-size: 14px; }
+  .link .badge { margin-left: 82px; }
+  .via { flex: none; width: 74px; font-size: 12px; color: var(--muted); }
+  .link a, .link code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  .link.here a { font-weight: 600; }
+  code { font: 13px ui-monospace, monospace; }
+  .badge { flex: none; font-size: 11px; padding: 1px 7px; border-radius: 10px; background: var(--chip); color: var(--muted); white-space: nowrap; }
+  .badge.ok { color: var(--ok); } .badge.warn { color: var(--warn); } .badge.bad { color: var(--bad); font-weight: 600; }
+  .facts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .none { color: var(--muted); font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 14px; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  tr:last-child td { border-bottom: 0; }
+  .scroll { overflow-x: auto; }
+  .error { color: var(--bad); margin: 8px 0; }
+  @media (max-width: 520px) { .grid { grid-template-columns: 1fr; } td:nth-child(2), th:nth-child(2) { display: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Agentbox hub</h1>
+    <div class="meta" id="meta">loading...</div>
+  </header>
+  <div class="error" id="error" hidden></div>
+  <h2>Services</h2>
+  <div class="grid" id="services"></div>
+  <h2>Other open ports</h2>
+  <div class="scroll"><div id="others"></div></div>
+</main>
+<script>
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[c]);
+// Which way this page was opened: a tunnel hostname, the Tailscale address, or anything else (LAN).
+let viewingVia = 'LAN';
+const via = h => (h.public || []).includes(location.hostname) ? 'Public'
+  : location.hostname === h.tailscale || /^100\./.test(location.hostname) ? 'Tailscale' : 'LAN';
+
+const PUBLIC = {
+  access: ['ok', 'Access login'],
+  'origin-jwt': ['warn', 'blocked: not in Access app'],
+  down: ['bad', 'tunnel error'],
+  'no-route': ['bad', 'no route'],
+  open: ['bad', 'OPEN without login'],
+};
+
+function health(s) {
+  if (s.unit_state && s.unit_state !== 'active') return ['bad', s.unit_state];
+  if (!s.listening) return ['bad', 'not listening'];
+  if (!s.local.ok) return ['warn', s.local.code ? `HTTP ${s.local.code}` : (s.local.error || 'no answer')];
+  return ['ok', s.local.code ? `HTTP ${s.local.code} · ${s.local.ms} ms` : `up · ${s.local.ms} ms`];
+}
+
+function publicRow(rule, kind) {
+  const [cls, label] = PUBLIC[rule.probe.verdict] || ['', rule.probe.verdict];
+  const path = rule.path ? rule.path.replace(/^\^/, '').replace(/\.\*$|\$$/, '') : '';
+  const target = `${rule.hostname}${path}`;
+  const link = kind === 'ssh'
+    ? `<code title="ssh via cloudflared access">${esc(target)}</code>`
+    : kind === 'api' ? `<code>${esc('https://' + target)}</code>`
+    : `<a href="https://${esc(target)}" target="_blank" rel="noopener">${esc(target)}</a>`;
+  return `<div class="link ${viewingVia === 'Public' ? 'here' : ''}"><span class="via">Public</span>${link}<span class="badge ${cls}">${esc(label)}</span></div>`;
+}
+
+function privateRow(p, port, kind) {
+  const target = `${p.host}:${port}`;
+  const link = p.url && kind !== 'api'
+    ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/\/$/, ''))}</a>`
+    : `<code>${esc(kind === 'ssh' ? `ssh ${p.host}` : target)}</code>`;
+  return `<div class="link ${viewingVia === p.via ? 'here' : ''}"><span class="via">${esc(p.via)}</span>${link}</div>`;
+}
+
+function card(s) {
+  const [cls, label] = health(s);
+  const rows = [
+    ...s.tunnel.map(r => publicRow(r, s.kind)),
+    ...s.private.map(p => privateRow(p, s.port, s.kind)),
+  ];
+  if (!s.tunnel.length) rows.push(`<div class="link"><span class="via">Public</span><span class="none">not on the tunnel</span></div>`);
+  return `<div class="card">
+    <div class="top"><span class="dot ${cls}" title="${esc(label)}"></span><span class="name">${esc(s.name)}</span><span class="port">:${s.port}</span></div>
+    <div class="about">${esc(s.about)}</div>
+    <div class="links">${rows.join('') || '<span class="none">not reachable</span>'}</div>
+    <div class="facts"><span class="badge ${cls}">${esc(label)}</span>
+      ${s.unit ? `<span class="badge">${esc(s.unit)}</span>` : ''}
+      ${s.process ? `<span class="badge">${esc(s.process)}</span>` : ''}</div>
+  </div>`;
+}
+
+function others(list, unmatched) {
+  if (!list.length && !unmatched.length) return '<div class="none">Nothing else listens on a non-loopback address.</div>';
+  const rows = list.map(o => `<tr><td><code>:${o.port}</code></td><td>${esc(o.process || '?')}</td>
+    <td>${o.private.map(p => p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.via)}</a>` : esc(p.via)).join(' · ') || '<span class="none">not HTTP</span>'}
+      ${o.tunnel.map(r => ` · <a href="https://${esc(r.hostname)}" target="_blank" rel="noopener">${esc(r.hostname)}</a>`).join('')}</td>
+    <td><code>${esc(o.addresses.join(' '))}</code></td></tr>`);
+  const dead = unmatched.map(r => `<tr><td><code>:${r.port}</code></td><td>(tunnel rule)</td>
+    <td>${esc(r.hostname)}</td><td><span class="badge bad">nothing listening</span></td></tr>`);
+  return `<table><tr><th>Port</th><th>Process</th><th>Open</th><th>Bound to</th></tr>${rows.concat(dead).join('')}</table>`;
+}
+
+async function load(refresh) {
+  try {
+    const res = await fetch('api/status' + (refresh ? '?refresh=1' : ''));
+    const d = await res.json();
+    const err = document.getElementById('error');
+    err.hidden = !d.error; err.textContent = d.error || '';
+    if (!d.services) return;
+    const h = d.host;
+    viewingVia = via(h);
+    const dot = state => `<span class="dot ${state === 'active' ? 'ok' : 'bad'}" style="display:inline-block"></span>`;
+    document.getElementById('meta').innerHTML =
+      `<span>${dot(h.cloudflared)} tunnel ${esc(h.cloudflared)}</span>
+       <span>${dot(h.tailscaled)} Tailscale ${esc(h.tailscale || 'no IP')}</span>
+       <span>viewing via ${viewingVia}</span>
+       <span>checked ${new Date(d.generated * 1000).toLocaleTimeString()}</span>
+       <button onclick="load(true)">Recheck</button>`;
+    document.getElementById('services').innerHTML = d.services.map(card).join('');
+    document.getElementById('others').innerHTML = others(d.others, d.unmatched_rules || []);
+  } catch (e) {
+    const err = document.getElementById('error');
+    err.hidden = false; err.textContent = `Could not load status: ${e}`;
+  }
+}
+load(false);
+setInterval(() => load(false), 15000);
+</script>
+</body>
+</html>

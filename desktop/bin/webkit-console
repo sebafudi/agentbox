@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""webkit-console URL [USER_AGENT]: load URL in WebKitGTK (Safari's engine) under a virtual X server and print
+JS errors, rejections and console output for 12 s. Run as: xvfb-run -a webkit-console URL. Used to debug
+iOS Safari-only failures (Safari hides cross-script details as "Script error.")."""
+import sys, gi
+gi.require_version('Gtk', '4.0'); gi.require_version('WebKit', '6.0')
+from gi.repository import Gtk, WebKit, GLib
+url, ua = sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None
+HOOK = """
+(function(){const post=m=>window.webkit.messageHandlers.log.postMessage(String(m));
+window.addEventListener('error',e=>post('ERROR '+(e.target&&e.target.src||e.target&&e.target.href||'')+' '+e.message+' @ '+e.filename+':'+e.lineno+':'+e.colno+' '+(e.error&&e.error.stack||'')),true);
+window.addEventListener('unhandledrejection',e=>post('REJECT '+(e.reason&&(e.reason.stack||e.reason))));
+for(const k of ['error','warn','log'])(o=>console[k]=(...a)=>{post(k.toUpperCase()+' '+a.join(' '));o.apply(console,a)})(console[k]);})();"""
+def act(app):
+    win = Gtk.ApplicationWindow(application=app); win.set_default_size(390, 844)
+    ucm = WebKit.UserContentManager()
+    ucm.add_script(WebKit.UserScript.new(HOOK, WebKit.UserContentInjectedFrames.ALL_FRAMES, WebKit.UserScriptInjectionTime.START, None, None))
+    ucm.register_script_message_handler('log', None)
+    ucm.connect('script-message-received::log', lambda m, v: print('JS:', v.to_string(), flush=True))
+    wv = WebKit.WebView(user_content_manager=ucm)
+    if ua: wv.get_settings().set_user_agent(ua)
+    wv.load_uri(url); win.set_child(wv); win.present()
+    GLib.timeout_add_seconds(12, lambda: (wv.evaluate_javascript("document.title", -1, None, None, None, lambda w, r: (print('TITLE:', w.evaluate_javascript_finish(r).to_string()), app.quit())), False)[1])
+app = Gtk.Application(); app.connect('activate', act); app.run([])

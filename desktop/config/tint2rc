@@ -1,0 +1,71 @@
+# Taskbar for agent desktops (slots 1-9): open windows on this display + display label + clock.
+
+# Background 1: panel
+rounded = 0
+border_width = 0
+background_color = #1e1e2e 100
+border_color = #000000 0
+
+# Background 2: task
+rounded = 3
+border_width = 0
+background_color = #313244 100
+border_color = #000000 0
+
+# Background 3: active task
+rounded = 3
+border_width = 1
+background_color = #45475a 100
+border_color = #89b4fa 100
+
+panel_items = ETC
+panel_size = 100% 30
+panel_margin = 0 0
+panel_padding = 6 3 6
+panel_background_id = 1
+panel_position = bottom center horizontal
+panel_layer = top
+panel_monitor = all
+panel_dock = 0
+wm_menu = 0
+strut_policy = follow_size
+autohide = 0
+
+taskbar_mode = single_desktop
+taskbar_padding = 0 0 4
+taskbar_background_id = 0
+taskbar_active_background_id = 0
+taskbar_name = 0
+
+task_text = 1
+task_icon = 1
+task_centered = 0
+task_maximum_size = 240 24
+task_padding = 6 2 4
+task_font = sans 9
+task_font_color = #cdd6f4 100
+task_active_font_color = #ffffff 100
+task_iconified_font_color = #7f849c 100
+task_background_id = 2
+task_active_background_id = 3
+task_iconified_background_id = 2
+mouse_left = toggle_iconify
+mouse_middle = close
+mouse_right = none
+mouse_scroll_up = prev_task
+mouse_scroll_down = next_task
+
+execp = new
+execp_command = echo "desktop $DISPLAY"
+execp_interval = 0
+execp_has_icon = 0
+execp_font = sans bold 9
+execp_font_color = #a6e3a1 100
+execp_padding = 6 0
+execp_background_id = 0
+
+time1_format = %H:%M
+time1_font = sans 9
+clock_font_color = #cdd6f4 100
+clock_padding = 6 0
+clock_background_id = 0

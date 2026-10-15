@@ -1,0 +1,25 @@
+# Install as ~/.config/systemd/user/agent-scheduler.service, then
+#   systemctl --user daemon-reload && systemctl --user enable --now agent-scheduler.service
+# and `loginctl enable-linger $USER` so it runs without a login session.
+# Node comes from the checkout's mise.toml pin (`mise trust && mise install` there first).
+# `mise exec` replaces itself with node, so signals and the stop timeout reach the server directly.
+[Unit]
+Description=Agent scheduler and private dashboard
+
+[Service]
+Type=simple
+WorkingDirectory=%h/code/agentbox/scheduler
+# Agent runners (omp, claude) and mise shims must be on PATH for scheduled runs.
+Environment=PATH=%h/.local/bin:%h/.local/share/mise/shims:/usr/local/bin:/usr/bin
+# Optional overrides (defaults shown):
+# Environment=SCHEDULER_DATA_DIR=%h/.local/state/agent-scheduler
+# Environment=SCHEDULER_SOCKET=%t/agent-scheduler.sock
+# Environment=SCHEDULER_PORT=8457
+ExecStart=/usr/bin/mise exec -- node server.mjs
+Restart=always
+RestartSec=5
+TimeoutStopSec=12
+UMask=0077
+
+[Install]
+WantedBy=default.target

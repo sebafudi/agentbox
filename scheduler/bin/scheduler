@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# CLI wrapper for agent-scheduler. Install as ~/.local/bin/scheduler.
+# Node comes from the mise.toml pin in the scheduler checkout (run `mise trust`
+# and `mise install` there once). Override the checkout with SCHEDULER_HOME.
+set -euo pipefail
+dir="${SCHEDULER_HOME:-$HOME/code/agentbox/scheduler}"
+exec mise exec -C "$dir" -- node "$dir/scheduler.mjs" "$@"

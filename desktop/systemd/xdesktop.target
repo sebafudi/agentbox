@@ -1,0 +1,3 @@
+[Unit]
+Description=Virtual X desktop for computer use (Xvfb :99 + openbox + VNC)
+Wants=xvfb.service openbox.service x11vnc.service

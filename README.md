@@ -16,6 +16,11 @@ The intended use: give an agent this repository, a hypervisor and your own requi
 |---|---|
 | [`skills/agentbox/`](skills/agentbox/SKILL.md) | The agentbox skill (Agent Skills format): layout, SSH workspace, packages, runtimes, Docker, browsers and virtual desktops, background and scheduled agents, networking, telemetry, resource limits, recovery. When an agent recreates a box from it, the skill tells it what to ask you first. |
 | [`login/`](login/README.md) | `agentbox-login`, the Go/Bubble Tea SSH home screen: launch or resume agents and shells in Zellij, search sessions, watch per-session CPU/RSS, manage scheduled jobs. Also `agentbox-facts`, the live machine snapshot that agents read. |
+| [`desktop/`](desktop/README.md) | `agent-desktop`: per-agent X11 virtual desktops (Xvfb, openbox, tint2, x11vnc) with a visible Chromium and chrome-devtools-mcp, watched and taken over from a browser through noVNC, plus screen reading via AT-SPI and OCR and an idle reaper. Skill: [`skills/agent-desktop/`](skills/agent-desktop/SKILL.md). |
+| [`scheduler/`](scheduler/README.md) | `agent-scheduler`: a persistent cron service for commands, omp, Claude print and the Claude Agent SDK, with run history, resumable agent runs, a `scheduler` CLI and a private HTTPS dashboard. Skill: [`skills/agent-scheduler/`](skills/agent-scheduler/SKILL.md). |
+| [`agent/`](agent/README.md) | `agent`: runs headless agents as transient systemd units, so another machine can use the box as a pool of remote subagents. |
+| [`hub/`](hub/README.md) | A one-page hub of everything the box exposes, with LAN, Tailscale and public links, unit state and an anonymous probe of each public hostname. |
+| [`telemetry/`](telemetry/README.md) | Token and tool telemetry for Claude Code, Codex and omp in SQLite, with a dashboard. Stores sizes and counts, never content. |
 
 ## What a box looks like
 
@@ -40,6 +45,4 @@ From then on, **the box is the source of truth**. Agents running on it change th
 
 Do not publish generated state (`machine-state.md`, `~/.local/state/`): it contains session names, paths, commands and network details.
 
-## Not here (yet)
-
-Components that exist on the reference box but are not published in this repository: the `agent-desktop` scripts and skill, the agent scheduler service, the services hub and the telemetry collector. The skill describes what they do.
+Each component's README lists its files, where they install and what they depend on; systemd units are in each component's `systemd/` folder. Everything here is copied from the reference box with private details removed, so expect to adapt paths, ports and limits.

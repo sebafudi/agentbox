@@ -1,0 +1,3 @@
+[Unit]
+Description=Agent desktop %i (Xvfb :10%i + openbox + tint2 taskbar + VNC 127.0.0.1:590%i)
+Wants=agent-xvfb@%i.service agent-openbox@%i.service agent-tint2@%i.service agent-x11vnc@%i.service

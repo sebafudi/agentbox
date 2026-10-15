@@ -1,0 +1,10 @@
+[Unit]
+Description=Agentbox hub: exposed services, links and status (port 6070)
+
+[Service]
+ExecStart=/usr/bin/python3 -I %h/.local/lib/agentbox-hub/hub.py --host 0.0.0.0 --port 6070
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

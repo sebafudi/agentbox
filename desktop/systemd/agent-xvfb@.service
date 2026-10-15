@@ -1,0 +1,7 @@
+[Unit]
+Description=Xvfb virtual display :10%i for agent desktop %i
+PartOf=agent-desktop@%i.target
+
+[Service]
+ExecStart=/usr/bin/Xvfb :10%i -screen 0 1280x800x24 -nolisten tcp +extension RANDR
+Restart=on-failure

@@ -1,0 +1,11 @@
+[Unit]
+Description=Taskbar (tint2) on :10%i
+PartOf=agent-desktop@%i.target
+BindsTo=agent-xvfb@%i.service
+After=agent-xvfb@%i.service agent-openbox@%i.service
+
+[Service]
+Environment=DISPLAY=:10%i
+ExecStartPre=/bin/sh -c 'for i in $(seq 50); do [ -S /tmp/.X11-unix/X10%i ] && exit 0; sleep 0.1; done; exit 1'
+ExecStart=/usr/bin/tint2 -c %h/.config/agent-desktop/tint2rc
+Restart=on-failure

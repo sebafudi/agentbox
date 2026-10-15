@@ -1,0 +1,11 @@
+[Unit]
+Description=Openbox window manager on :10%i
+PartOf=agent-desktop@%i.target
+BindsTo=agent-xvfb@%i.service
+After=agent-xvfb@%i.service
+
+[Service]
+Environment=DISPLAY=:10%i
+ExecStartPre=/bin/sh -c 'for i in $(seq 50); do [ -S /tmp/.X11-unix/X10%i ] && exit 0; sleep 0.1; done; exit 1'
+ExecStart=/usr/bin/openbox
+Restart=on-failure

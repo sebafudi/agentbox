@@ -1,0 +1,8 @@
+[Unit]
+Description=Refresh cached Zellij sessions for the agentbox login and finder
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:%h/.local/share/mise/shims:/usr/local/sbin:/usr/local/bin:/usr/bin
+ExecStart=%h/.local/bin/agentbox-login --refresh
+TimeoutStartSec=15s

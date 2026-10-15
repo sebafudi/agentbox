@@ -1,0 +1,11 @@
+[Unit]
+Description=Openbox window manager on :99
+PartOf=xdesktop.target
+BindsTo=xvfb.service
+After=xvfb.service
+
+[Service]
+Environment=DISPLAY=:99
+ExecStartPre=/bin/sh -c 'for i in $(seq 50); do [ -S /tmp/.X11-unix/X99 ] && exit 0; sleep 0.1; done; exit 1'
+ExecStart=/usr/bin/openbox
+Restart=on-failure

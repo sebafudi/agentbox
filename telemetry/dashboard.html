@@ -1,0 +1,894 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agentbox Telemetry</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #111217; --panel: #181b1f; --border: #2c3235; --text: #ccccdc; --muted: #8e8e9e;
+    --accent: #6e9fff; --green: #73bf69; --yellow: #fade2a; --orange: #ff9830; --red: #f2495c;
+    --purple: #b877d9; --cyan: #5794f2;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 Inter, system-ui, -apple-system, sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;
+           padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 2; }
+  .brand { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+  h1 { font-size: 16px; font-weight: 500; margin: 0; }
+  #updated { color: var(--muted); font-size: 12px; }
+  nav { display: flex; gap: 4px; }
+  nav a { color: var(--muted); padding: 2px 8px; border-radius: 2px; }
+  nav a.on { color: var(--text); background: #22252b; }
+  .ranges { display: flex; gap: 2px; flex-wrap: wrap; }
+  .ranges button { background: #22252b; color: var(--text); border: 1px solid var(--border); padding: 4px 10px; cursor: pointer; font: inherit; }
+  .ranges button:first-child { border-radius: 2px 0 0 2px; }
+  .ranges button:last-child { border-radius: 0 2px 2px 0; }
+  .ranges button.on { background: #3d71d9; border-color: #3d71d9; color: #fff; }
+  main { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 8px; padding: 8px 16px 24px; }
+  main[hidden] { display: none; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 2px; padding: 8px 10px; min-width: 0; }
+  .panel h2 { font-size: 12px; font-weight: 500; margin: 0 0 6px; color: var(--text); }
+  .panel h2 small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+  .stat { grid-column: span 2; display: flex; flex-direction: column; justify-content: space-between; min-height: 92px; }
+  .stat .value { font-size: 28px; font-weight: 500; line-height: 1.1; }
+  .stat .sub { color: var(--muted); font-size: 11px; }
+  .w3 { grid-column: span 3; } .w4 { grid-column: span 4; } .w6 { grid-column: span 6; } .w8 { grid-column: span 8; } .w12 { grid-column: span 12; }
+  .chart { position: relative; height: 240px; }
+  .chart.tall { height: 300px; }
+  .table-wrap { overflow-x: auto; max-height: 420px; overflow-y: auto; }
+  .table-wrap.long { max-height: 640px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+  th { text-align: left; color: var(--accent); font-weight: 500; padding: 4px 8px; border-bottom: 1px solid var(--border);
+       position: sticky; top: 0; background: var(--panel); cursor: pointer; white-space: nowrap; }
+  td { padding: 4px 8px; border-bottom: 1px solid #202226; white-space: nowrap; max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
+  td.num, th.num { text-align: right; }
+  td.wide { max-width: 460px; }
+  tr:hover td { background: #1f2227; }
+  tr.link { cursor: pointer; }
+  tr.selected td { background: #1d2a42; }
+  tr.selected:hover td { background: #22324f; }
+  a.filter { color: inherit; border-bottom: 1px dotted #4a4f57; }
+  a.filter:hover { color: var(--accent); border-bottom-color: var(--accent); text-decoration: none; }
+  a.filter.on { color: var(--accent); }
+  .chips { grid-column: span 12; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 22px; }
+  .chip { display: inline-flex; gap: 6px; align-items: center; background: #1d2a42; border: 1px solid #3d71d9; border-radius: 10px;
+          padding: 1px 4px 1px 9px; color: var(--text); max-width: 100%; }
+  .chip b { font-weight: 500; color: var(--muted); }
+  .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 420px; }
+  .chip a { color: var(--muted); padding: 0 4px; border-radius: 8px; }
+  .chip a:hover { color: #fff; background: #3d71d9; text-decoration: none; }
+  .bar { display: inline-block; height: 6px; background: var(--cyan); border-radius: 1px; vertical-align: middle; margin-right: 6px; opacity: .8; }
+  .bad { color: var(--red); } .warn { color: var(--orange); } .good { color: var(--green); } .muted { color: var(--muted); }
+  .error { display: none; grid-column: span 12; color: var(--red); }
+  .filters { grid-column: span 12; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  input[type=search], select { background: #0b0c0e; color: var(--text); border: 1px solid var(--border); border-radius: 2px; padding: 5px 8px; font: inherit; }
+  input[type=search] { flex: 1 1 260px; min-width: 0; }
+  label { color: var(--muted); display: flex; align-items: center; gap: 4px; }
+  .crumbs { grid-column: span 12; display: flex; flex-direction: column; gap: 4px; padding: 4px 0; }
+  .crumbs h2 { font-size: 20px; font-weight: 500; margin: 0; overflow-wrap: anywhere; }
+  .crumbs .ids { color: var(--muted); font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+  .synopsis { grid-column: span 12; font-size: 14px; line-height: 1.6; }
+  .synopsis p { margin: 0 0 4px; }
+  .pill { display: inline-block; padding: 0 6px; border-radius: 8px; background: #22252b; color: var(--muted); font-size: 11px; margin-left: 6px; }
+  .note { color: var(--muted); font-size: 11px; margin-top: 6px; }
+  #inspector { position: fixed; top: 0; right: 0; bottom: 0; width: min(760px, 100vw); background: var(--panel); border-left: 1px solid var(--border);
+               z-index: 5; display: flex; flex-direction: column; box-shadow: -8px 0 24px rgba(0,0,0,.4); }
+  #inspector[hidden] { display: none; }
+  #inspector header { position: static; padding: 10px 16px; }
+  #inspector header h2 { font-size: 14px; font-weight: 500; margin: 0; overflow-wrap: anywhere; }
+  #inspector button { background: #22252b; color: var(--text); border: 1px solid var(--border); border-radius: 2px; padding: 4px 10px; cursor: pointer; font: inherit; }
+  #inspector .body { overflow: auto; padding: 8px 16px 24px; flex: 1; }
+  #inspector h3 { font-size: 12px; font-weight: 500; color: var(--accent); margin: 12px 0 4px; }
+  #inspector pre { background: #0b0c0e; border: 1px solid var(--border); border-radius: 2px; padding: 8px; margin: 0; white-space: pre-wrap;
+                   overflow-wrap: anywhere; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; max-height: 60vh; overflow: auto; }
+  #inspector .image { display: block; margin: 6px 0; padding: 6px; border: 1px solid var(--border); border-radius: 2px; background: var(--panel); white-space: normal; }
+  #inspector .image img { display: block; max-width: 100%; height: auto; margin-bottom: 6px; background: #fff; }
+  #inspector .image .base64 { display: block; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; margin-bottom: 6px; color: var(--muted); }
+  #inspector .image .meta { color: var(--muted); font-size: 11px; margin-left: 8px; }
+  @media (max-width: 1100px) { .stat { grid-column: span 4; } .w3, .w4, .w6, .w8 { grid-column: span 12; } }
+  @media (max-width: 600px) { main { padding: 8px 16px; } .stat { grid-column: span 6; } .stat .value { font-size: 22px; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <h1>Agentbox Telemetry</h1>
+    <nav><a href="#/" id="nav-overview">Overview</a><a href="#/sessions" id="nav-sessions">Sessions</a></nav>
+    <span id="updated"></span>
+  </div>
+  <div class="ranges" id="ranges"></div>
+</header>
+
+<main id="view-overview">
+  <div class="panel error"></div>
+  <div class="chips" id="chips-overview"></div>
+  <div class="panel stat"><h2>Tokens</h2><div class="value" id="s-tokens">-</div><div class="sub" id="s-tokens-sub"></div></div>
+  <div class="panel stat"><h2>Cost (reported)</h2><div class="value" id="s-cost">-</div><div class="sub" id="s-cost-sub"></div></div>
+  <div class="panel stat"><h2>LLM calls</h2><div class="value" id="s-calls">-</div><div class="sub" id="s-calls-sub"></div></div>
+  <div class="panel stat"><h2>Cache hit</h2><div class="value" id="s-cache">-</div><div class="sub">cached / all input</div></div>
+  <div class="panel stat"><h2>Tool calls</h2><div class="value" id="s-tools">-</div><div class="sub" id="s-tools-sub"></div></div>
+  <div class="panel stat"><h2>Desktop actions</h2><div class="value" id="s-actions">-</div><div class="sub" id="s-actions-sub"></div></div>
+
+  <div class="panel w8"><h2>Tokens over time <small>by type, stacked</small></h2><div class="chart"><canvas id="c-tokens"></canvas></div></div>
+  <div class="panel w4"><h2>Tokens by source <small>click to filter</small></h2><div class="chart"><canvas id="c-sources"></canvas></div></div>
+  <div class="panel w4"><h2>Cost over time <small>reported by omp / Claude</small></h2><div class="chart"><canvas id="c-cost"></canvas></div></div>
+  <div class="panel w4"><h2>Desktop actions <small>ok / failed</small></h2><div class="chart"><canvas id="c-actions"></canvas></div></div>
+  <div class="panel w4"><h2>Codex rate limits <small>% used</small></h2><div class="chart"><canvas id="c-limits"></canvas></div></div>
+
+  <div class="panel w12"><h2>Models <small>click to filter</small></h2><div class="table-wrap" id="t-models"></div></div>
+  <div class="panel w6"><h2>Tools by result size <small>output fed back into context; click to filter</small></h2><div class="table-wrap" id="t-tools"></div></div>
+  <div class="panel w6"><h2>agent-desktop commands <small>click to filter</small></h2><div class="table-wrap" id="t-actions"></div></div>
+  <div class="panel w12"><h2>Runs <small>agent spawn, agent-desktop agent, scheduler; click for its sessions</small></h2><div class="table-wrap" id="t-runs"></div></div>
+  <div class="panel w12"><h2 id="h-sessions">Heaviest sessions <small>click a row for details</small></h2><div class="table-wrap" id="t-sessions"></div></div>
+</main>
+
+<main id="view-sessions" hidden>
+  <div class="panel error"></div>
+  <div class="filters">
+    <input type="search" id="f-query" placeholder="Search title, project, branch, run, model or id">
+    <select id="f-source"><option value="">all sources</option><option>claude</option><option>codex</option><option>omp</option><option>actions</option></select>
+    <label><input type="checkbox" id="f-subagents"> include omp subagents</label>
+    <span class="muted" id="f-count"></span>
+  </div>
+  <div class="chips" id="chips-sessions"></div>
+  <div class="panel w12"><div class="table-wrap long" id="t-list"></div></div>
+</main>
+
+<aside id="inspector" hidden>
+  <header><h2 id="i-title"></h2><button id="i-close">Close</button></header>
+  <div class="body" id="i-body"></div>
+</aside>
+
+<main id="view-session" hidden>
+  <div class="panel error"></div>
+  <div class="crumbs">
+    <a href="#/sessions">&larr; Sessions</a>
+    <h2 id="d-title"></h2>
+    <div class="ids" id="d-ids"></div>
+  </div>
+  <div class="chips" id="chips-session"></div>
+  <div class="panel synopsis" id="d-synopsis"></div>
+  <div class="panel stat"><h2>Duration</h2><div class="value" id="d-duration">-</div><div class="sub" id="d-duration-sub"></div></div>
+  <div class="panel stat"><h2>Tokens</h2><div class="value" id="d-tokens">-</div><div class="sub" id="d-tokens-sub"></div></div>
+  <div class="panel stat"><h2>Cost</h2><div class="value" id="d-cost">-</div><div class="sub" id="d-cost-sub"></div></div>
+  <div class="panel stat"><h2>LLM calls</h2><div class="value" id="d-calls">-</div><div class="sub" id="d-calls-sub"></div></div>
+  <div class="panel stat"><h2>Tool calls</h2><div class="value" id="d-tools">-</div><div class="sub" id="d-tools-sub"></div></div>
+  <div class="panel stat"><h2>Peak context</h2><div class="value" id="d-peak">-</div><div class="sub" id="d-peak-sub"></div></div>
+
+  <div class="panel w8"><h2>Context per LLM call <small>input + cache read + cache write, per agent; output on the right axis</small></h2>
+    <div class="chart tall"><canvas id="c-context"></canvas></div></div>
+  <div class="panel w4"><h2>Tools by result size <small>chars fed back</small></h2><div class="chart tall"><canvas id="c-dtools"></canvas></div></div>
+
+  <div class="panel w6"><h2>What filled the context <small><span id="d-context-thread">main thread</span>, estimated tokens (chars / 4)</small></h2>
+    <div class="chart tall"><canvas id="c-dcontext"></canvas></div><div class="note" id="d-context-note"></div></div>
+  <div class="panel w6"><h2>Context sources <small>click to filter</small></h2><div class="table-wrap" id="t-dcontext"></div></div>
+  <div class="panel w6"><h2>Skills used <small>click to filter</small></h2><div class="table-wrap" id="t-dskills"></div></div>
+  <div class="panel w6"><h2>Largest context additions <small>click a row to see the content</small></h2><div class="table-wrap" id="t-dlargest"></div></div>
+  <div class="panel w6"><h2>Models <small>click to filter</small></h2><div class="table-wrap" id="t-dmodels"></div></div>
+  <div class="panel w6"><h2>Agents <small>main thread and subagents; click to filter</small></h2><div class="table-wrap" id="t-dagents"></div></div>
+  <div class="panel w12" id="p-children"><h2>Child sessions</h2><div class="table-wrap" id="t-dchildren"></div></div>
+  <div class="panel w12"><h2>Tools <small>click to filter</small></h2><div class="table-wrap" id="t-dtools"></div></div>
+  <div class="panel w12"><h2>Events <small id="d-events-note"></small>
+    <select id="f-kind" style="margin-left:8px"></select></h2><div class="table-wrap long" id="t-devents"></div></div>
+</main>
+
+<script>
+const RANGES = [["6h", 0.25], ["24h", 1], ["7d", 7], ["30d", 30], ["90d", 90]];
+const COLORS = { input: "#5794f2", cached: "#73bf69", cache_write: "#fade2a", output: "#ff9830",
+                 claude: "#ff9830", codex: "#73bf69", omp: "#5794f2", actions: "#b877d9" };
+const PALETTE = ["#5794f2", "#73bf69", "#ff9830", "#b877d9", "#fade2a", "#f2495c", "#8ab8ff", "#37872d"];
+const SOURCE_NAMES = { claude: "Claude Code", codex: "Codex", omp: "omp" };
+let days = Number(localStorageGet("days")) || 7;
+const charts = {};
+let route = { view: "overview", filters: {} };
+// Filters per view, as hash query parameters (so Back undoes a filter), with the label their chip shows.
+const FILTERS = {
+  overview: { source: "source", model: "model", name: "tool" },
+  sessions: { project: "project", branch: "branch", model: "model", run: "run" },
+  session: { agent: "agent", model: "model", kind: "kind", name: "name" },
+};
+// Kept in the hash too, but shown by their own inputs instead of a chip.
+const CONTROLS = { sessions: ["q", "source", "subagents"], session: ["event"] };
+
+function localStorageGet(key) { try { return localStorage.getItem(key); } catch { return null; } }
+function localStorageSet(key, value) { try { localStorage.setItem(key, value); } catch {} }
+
+function short(n) {
+  if (n == null) return "-";
+  const a = Math.abs(n);
+  if (a >= 1e9) return (n / 1e9).toFixed(2) + "B";
+  if (a >= 1e6) return (n / 1e6).toFixed(a >= 1e7 ? 1 : 2) + "M";
+  if (a >= 1e3) return (n / 1e3).toFixed(a >= 1e4 ? 0 : 1) + "k";
+  return String(Math.round(n));
+}
+const money = n => n == null ? "-" : "$" + (n >= 100 ? n.toFixed(0) : n.toFixed(2));
+const ms = n => n == null ? "-" : n >= 60000 ? (n / 60000).toFixed(1) + "m" : n >= 1000 ? (n / 1000).toFixed(1) + "s" : Math.round(n) + "ms";
+const pct = (a, b) => b ? Math.round(100 * a / b) + "%" : "-";
+const parseTime = s => s ? new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(s) || s.length <= 16 ? s.replace(" ", "T") : s + "Z") : null;
+const when = s => s ? parseTime(s).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "-";
+const clock = s => s ? parseTime(s).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "-";
+const tail = (s, n) => !s ? "" : s.length > n ? "…" + s.slice(-n) : s;
+const homeless = s => (s || "").replace(/^\/home\/[^/]+/, "~");
+const plural = (n, word) => `${short(n || 0)} ${word}${n === 1 ? "" : "s"}`;
+function span(a, b) {
+  const seconds = Math.max(0, (parseTime(b) - parseTime(a)) / 1000);
+  if (seconds < 90) return Math.round(seconds) + "s";
+  if (seconds < 5400) return Math.round(seconds / 60) + "m";
+  const h = Math.floor(seconds / 3600), m = Math.round((seconds % 3600) / 60);
+  return h >= 48 ? Math.round(h / 24) + "d" : `${h}h ${m}m`;
+}
+
+function setText(id, text) { document.getElementById(id).textContent = text; }
+function el(tag, text, cls) { const e = document.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e; }
+
+function sessionLabel(s) {
+  if (s.title) return { text: s.title, muted: false };
+  if (s.parent_session_id) return { text: `subagent of ${s.parent_title || s.parent_session_id.slice(0, 8)}`, muted: true };
+  if (s.run_name) return { text: `${s.launcher || "run"}: ${s.run_name}`, muted: true };
+  return { text: s.project ? homeless(s.project) : s.session_id, muted: true };
+}
+// Opening a session keeps the filters that also mean something there (model, tool).
+function sessionHref(s) {
+  const keep = route.view === "session" ? {} : { model: route.filters.model, name: route.filters.name };
+  return hashFor(`#/session/${encodeURIComponent(s.source)}/${encodeURIComponent(s.session_id)}`, keep);
+}
+
+function hashFor(path, filters) {
+  const query = new URLSearchParams(Object.entries(filters).filter(([, v]) => v != null && v !== ""));
+  return path + (query.toString() ? "?" + query : "");
+}
+const currentPath = () => location.hash.split("?")[0] || "#/";
+const isActive = changes => Object.entries(changes).every(([k, v]) => route.filters[k] === v);
+// Applies changes to the current filters, or removes them when they are all already set (a click toggles).
+function filterHref(changes) {
+  const filters = { ...route.filters };
+  delete filters.event;
+  const off = isActive(changes);
+  for (const [k, v] of Object.entries(changes)) if (off || v == null || v === "") delete filters[k]; else filters[k] = v;
+  return hashFor(currentPath(), filters);
+}
+const applyFilter = changes => { location.hash = filterHref(changes); };
+// A value that filters on click; the rest of its table row keeps its own click.
+function filterLink(changes, text) {
+  const a = el("a", text, "filter" + (isActive(changes) ? " on" : ""));
+  a.href = filterHref(changes);
+  a.title = isActive(changes) ? "click to remove this filter" : "click to filter on this";
+  return a;
+}
+function setQuietly(key, value) {
+  if (value) route.filters[key] = value; else delete route.filters[key];
+  history.replaceState(null, "", hashFor(currentPath(), route.filters));
+}
+
+function renderChips(view, labels = {}) {
+  const box = document.getElementById(`chips-${view}`);
+  const active = Object.keys(FILTERS[view]).filter(k => route.filters[k]);
+  if (!active.length) { box.replaceChildren(el("span", "Click a row, bar or underlined value to filter on it.", "muted")); return; }
+  const chips = active.map(k => {
+    const chip = el("span", null, "chip"), remove = el("a", "\u00d7");
+    const value = labels[k]?.(route.filters[k]) ?? route.filters[k];
+    chip.append(el("b", FILTERS[view][k]), el("span", value));
+    chip.lastChild.title = route.filters[k];
+    remove.href = filterHref({ [k]: route.filters[k] });
+    remove.title = "remove this filter";
+    chip.append(remove);
+    return chip;
+  });
+  const clear = el("a", "clear all");
+  clear.href = hashFor(currentPath(), Object.fromEntries((CONTROLS[view] || []).filter(k => k !== "event" && route.filters[k]).map(k => [k, route.filters[k]])));
+  box.replaceChildren(...chips, ...(active.length > 1 ? [clear] : []));
+}
+
+function buildRanges() {
+  const box = document.getElementById("ranges");
+  for (const [label, value] of RANGES) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.className = value === days ? "on" : "";
+    b.onclick = () => { days = value; localStorageSet("days", value); [...box.children].forEach(c => c.className = c === b ? "on" : ""); load(); };
+    box.appendChild(b);
+  }
+}
+
+Chart.defaults.color = "#8e8e9e";
+Chart.defaults.borderColor = "#2c3235";
+Chart.defaults.font.size = 11;
+
+function chart(id, type, labels, datasets, options = {}) {
+  const value = v => options.money ? money(v) : short(v);
+  const config = {
+    type, data: { labels, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      indexAxis: options.horizontal ? "y" : "x",
+      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { display: options.legend !== false, labels: { boxWidth: 10, boxHeight: 10 } },
+                 tooltip: { callbacks: {
+                   title: options.tooltipTitle,
+                   label: c => `${c.dataset.label}: ${value(options.horizontal ? c.parsed.x : c.parsed.y ?? c.parsed)}` } } },
+      scales: type === "doughnut" ? {} : {
+        x: { stacked: options.stacked, grid: { display: false }, ticks: { maxRotation: 0, autoSkipPadding: 12,
+             ...(options.horizontal ? { callback: v => short(v) } : {}) } },
+        y: { stacked: options.stacked, beginAtZero: true, max: options.max,
+             ticks: { callback: options.horizontal ? function (v) { return tail(this.getLabelForValue(v), 18); } : v => value(v) } },
+        ...(options.y2 ? { y2: { position: "right", beginAtZero: true, grid: { display: false }, ticks: { callback: v => short(v) } } } : {}),
+      },
+    },
+  };
+  if (options.onClick) {
+    const hit = (event, chart) => chart.getElementsAtEventForMode(event, "nearest", { intersect: true }, false)[0];
+    config.options.onClick = (event, _, chart) => { const p = hit(event, chart); if (p) options.onClick(p.index, p.datasetIndex); };
+    config.options.onHover = (event, _, chart) => { event.native.target.style.cursor = hit(event, chart) ? "pointer" : "default"; };
+  }
+  if (charts[id]) charts[id].destroy();
+  charts[id] = new Chart(document.getElementById(id), config);
+}
+
+function pivot(series, keyField, valueField) {
+  const buckets = [...new Set(series.map(r => r.bucket))].sort();
+  const keys = [...new Set(series.map(r => r[keyField]))];
+  const map = {};
+  for (const r of series) map[r.bucket + "|" + r[keyField]] = (map[r.bucket + "|" + r[keyField]] || 0) + (r[valueField] || 0);
+  return { buckets, keys, values: k => buckets.map(b => map[b + "|" + k] || 0) };
+}
+
+function table(id, columns, data, sortKey, options = {}) {
+  const box = document.getElementById(id);
+  let sort = { key: sortKey, desc: options.asc ? false : true };
+  const max = {};
+  for (const c of columns) if (c.bar) max[c.key] = Math.max(1, ...data.map(r => r[c.key] || 0));
+  function render() {
+    const sorted = sort.key == null ? data : [...data].sort((a, b) => {
+      const x = a[sort.key], y = b[sort.key];
+      const cmp = typeof x === "number" || typeof y === "number" ? (x || 0) - (y || 0) : String(x ?? "").localeCompare(String(y ?? ""));
+      return sort.desc ? -cmp : cmp;
+    });
+    const t = document.createElement("table");
+    const head = t.createTHead().insertRow();
+    for (const c of columns) {
+      const th = document.createElement("th");
+      th.textContent = c.label + (sort.key === c.key ? (sort.desc ? " ↓" : " ↑") : "");
+      if (c.num) th.className = "num";
+      th.onclick = () => { sort = { key: c.key, desc: sort.key === c.key ? !sort.desc : true }; render(); };
+      head.appendChild(th);
+    }
+    const body = t.createTBody();
+    if (!sorted.length) { const td = body.insertRow().insertCell(); td.colSpan = columns.length; td.className = "muted"; td.textContent = options.empty || "no data in this range"; }
+    for (const r of sorted) {
+      const tr = body.insertRow();
+      if (options.selected && options.selected(r)) tr.classList.add("selected");
+      if (options.href || options.onclick) {
+        tr.classList.add("link");
+        tr.onclick = event => {
+          if (event.target.closest("a")) return;
+          if (options.onclick) options.onclick(r); else location.hash = options.href(r);
+        };
+      }
+      for (const c of columns) {
+        const td = tr.insertCell();
+        if (c.num) td.className = "num";
+        if (c.wide) td.className = "wide";
+        const value = r[c.key];
+        if (c.bar) {
+          const bar = document.createElement("span");
+          bar.className = "bar"; bar.style.width = Math.round(60 * (value || 0) / max[c.key]) + "px";
+          td.appendChild(bar);
+        }
+        if (c.node) td.appendChild(c.node(value, r));
+        else td.appendChild(document.createTextNode(c.fmt ? c.fmt(value, r) : value ?? "-"));
+        if (c.title) td.title = c.title(r) ?? "";
+        if (c.cls) { const cls = c.cls(value, r); if (cls) td.classList.add(cls); }
+      }
+    }
+    box.replaceChildren(t);
+  }
+  render();
+}
+
+const titleNode = (_, r) => {
+  const label = sessionLabel(r);
+  const node = el("span", label.text, label.muted ? "muted" : "");
+  if (r.children) node.appendChild(el("span", plural(r.children, "subagent"), "pill"));
+  return node;
+};
+
+function showError(view, message) {
+  const err = document.querySelector(`#view-${view} .error`);
+  err.textContent = message || "";
+  err.style.display = message ? "block" : "none";
+}
+
+async function getJSON(url) {
+  const res = await fetch(url);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+function renderOverview(d) {
+  const t = d.totals, f = route.filters;
+  renderChips("overview");
+  const input = (t.input || 0) + (t.cached || 0) + (t.cache_write || 0);
+  setText("updated", `last event ${when(d.last_event)}, ${d.bucket === "day" ? "daily" : "hourly"} buckets`);
+  setText("s-tokens", short(input + (t.output || 0)));
+  setText("s-tokens-sub", `${short(input)} in, ${short(t.output)} out`);
+  setText("s-cost", money((t.event_cost || 0) + (t.reported_cost || 0)));
+  setText("s-cost-sub", t.reported_cost == null && (f.model || f.name) ? "per call only: Claude reports per session" : "omp per call, Claude per session; Codex is subscription");
+  setText("s-calls", short(t.llm_calls));
+  setText("s-calls-sub", `${short(t.sessions)} sessions, ${short(t.prompts)} prompts, ${t.compactions || 0} compactions`);
+  setText("s-cache", pct(t.cached || 0, input));
+  setText("s-tools", short(t.tool_calls));
+  setText("s-tools-sub", `${t.tool_fail || 0} failed (${pct(t.tool_fail || 0, t.tool_calls)})`);
+  setText("s-actions", short(t.actions));
+  setText("s-actions-sub", `${t.action_fail || 0} failed (${pct(t.action_fail || 0, t.actions)})`);
+
+  const tok = d.tokens_series;
+  const buckets = [...new Set(tok.map(r => r.bucket))].sort();
+  const sumBy = field => buckets.map(b => tok.filter(r => r.bucket === b).reduce((s, r) => s + (r[field] || 0), 0));
+  chart("c-tokens", "bar", buckets, ["input", "cached", "cache_write", "output"].map(k =>
+    ({ label: k.replace("_", " "), data: sumBy(k), backgroundColor: COLORS[k] })), { stacked: true });
+
+  const sources = d.sources.map(r => r.source);
+  chart("c-sources", "doughnut", sources, [{ label: "tokens", data: d.sources.map(r => r.tokens),
+    backgroundColor: sources.map((s, i) => f.source && f.source !== s ? "#2c3235" : COLORS[s] || PALETTE[i]), borderWidth: 0 }],
+    { onClick: i => applyFilter({ source: sources[i] }) });
+
+  const cost = pivot(d.cost_series, "source", "cost");
+  chart("c-cost", "bar", cost.buckets, cost.keys.map((k, i) => ({ label: k, data: cost.values(k), backgroundColor: COLORS[k] || PALETTE[i] })),
+    { stacked: true, money: true, onClick: (_, ds) => applyFilter({ source: cost.keys[ds] }) });
+
+  chart("c-actions", "bar", d.actions_series.map(r => r.bucket), [
+    { label: "ok", data: d.actions_series.map(r => r.ok), backgroundColor: "#73bf69" },
+    { label: "failed", data: d.actions_series.map(r => r.failed), backgroundColor: "#f2495c" }], { stacked: true });
+
+  const limits = pivot(d.rate_limits.map(r => ({ ...r, bucket: r.ts })), "window", "used_percent");
+  chart("c-limits", "line", limits.buckets, limits.keys.map((k, i) => ({ label: k, data: limits.values(k), borderColor: PALETTE[i],
+    backgroundColor: PALETTE[i], pointRadius: 0, borderWidth: 1.5, tension: .2 })), { max: 100 });
+
+  const n = { num: true };
+  const sourceCell = { key: "source", label: "Source", node: v => filterLink({ source: v }, v) };
+  table("t-models", [
+    sourceCell, { key: "model", label: "Model" },
+    { key: "calls", label: "Calls", ...n, fmt: short },
+    { key: "input", label: "Input", ...n, fmt: short }, { key: "cached", label: "Cache read", ...n, fmt: short, bar: true },
+    { key: "cache_write", label: "Cache write", ...n, fmt: short }, { key: "output", label: "Output", ...n, fmt: short, bar: true },
+    { key: "cost", label: "Cost", ...n, fmt: money },
+  ], d.models, "cached", { onclick: r => applyFilter({ model: r.model }), selected: r => r.model === f.model });
+  table("t-tools", [
+    sourceCell, { key: "name", label: "Tool" },
+    { key: "calls", label: "Calls", ...n, fmt: short },
+    { key: "result_chars", label: "Result chars", ...n, fmt: short, bar: true },
+    { key: "args_chars", label: "Args chars", ...n, fmt: short },
+    { key: "avg_ms", label: "Avg", ...n, fmt: ms },
+    { key: "failed", label: "Fail", ...n, cls: v => v ? "bad" : "" },
+    { key: "truncated", label: "Truncated", ...n, cls: v => v ? "warn" : "" },
+  ], d.tools, "result_chars", { onclick: r => applyFilter({ name: r.name }), selected: r => r.name === f.name });
+  table("t-actions", [
+    { key: "name", label: "Command", fmt: v => (v || "").replace("agent-desktop ", "") },
+    { key: "calls", label: "Calls", ...n },
+    { key: "output_chars", label: "Output chars", ...n, fmt: short, bar: true },
+    { key: "avg_ms", label: "Avg", ...n, fmt: ms },
+    { key: "failed", label: "Fail", ...n, cls: v => v ? "bad" : "" },
+    { key: "outcomes", label: "Outcomes" }, { key: "callers", label: "Callers" },
+  ], d.actions, "output_chars", { onclick: r => applyFilter({ name: r.name }), selected: r => r.name === f.name });
+  table("t-runs", [
+    { key: "started", label: "Started", fmt: when }, { key: "launcher", label: "Launcher" },
+    { key: "name", label: "Name", title: r => r.run_id },
+    { key: "status", label: "Status", cls: v => v && /success|idle/.test(v) ? "good" : v ? "bad" : "" },
+    { key: "models", label: "Models" },
+    { key: "llm_calls", label: "Calls", ...n }, { key: "tool_calls", label: "Tools", ...n },
+    { key: "input_all", label: "Input (all)", ...n, fmt: short, bar: true }, { key: "output_tokens", label: "Output", ...n, fmt: short },
+    { key: "cost", label: "Cost", ...n, fmt: money },
+    { key: "actions", label: "Actions", ...n }, { key: "failed_actions", label: "Failed", ...n, cls: v => v ? "bad" : "" },
+  ], d.runs, "started", { href: r => hashFor("#/sessions", { run: r.run_id }) });
+  const filtered = Object.keys(FILTERS.overview).some(k => f[k]);
+  document.getElementById("h-sessions").firstChild.textContent = filtered ? "Sessions with matching events " : "Heaviest sessions ";
+  table("t-sessions", [
+    { key: "started", label: "Started", fmt: when }, { key: "source", label: "Source" },
+    { key: "title", label: "Session", node: titleNode, wide: true, title: r => `${homeless(r.project)}\n${r.session_id}` },
+    { key: "models", label: "Models" },
+    { key: "prompts", label: "Prompts", ...n }, { key: "llm_calls", label: "Calls", ...n },
+    { key: "tool_calls", label: "Tools", ...n }, { key: "compactions", label: "Compact", ...n },
+    { key: "input_all", label: "Input (all)", ...n, fmt: short, bar: true }, { key: "output_tokens", label: "Output", ...n, fmt: short },
+    { key: "cost", label: "Cost", ...n, fmt: money },
+    ...(filtered ? [{ key: "matched", label: "Matching", ...n, fmt: short, bar: true }] : []),
+  ], d.sessions, filtered ? "matched" : "input_all", { href: sessionHref });
+}
+
+const listLink = (changes, text) => {
+  if (route.view === "sessions") return filterLink(changes, text);
+  const a = el("a", text, "filter");
+  a.href = hashFor("#/sessions", changes);
+  return a;
+};
+const modelsNode = v => {
+  const box = el("span");
+  [...new Set((v || "").split(",").map(m => m.trim()).filter(Boolean))].forEach((m, i) => {
+    if (i) box.append(", ");
+    box.append(listLink({ model: m }, m.replace(/^[a-z-]+\//, "")));
+  });
+  return box;
+};
+const listColumns = [
+  { key: "ended", label: "Last active", fmt: when },
+  { key: "source", label: "Source", node: v => listLink({ source: v }, v) },
+  { key: "title", label: "Session", node: titleNode, wide: true, title: r => `${homeless(r.project)}\n${r.session_id}` },
+  { key: "project", label: "Project", node: v => v ? listLink({ project: v }, tail(homeless(v), 32)) : el("span"), title: r => homeless(r.project) },
+  { key: "branch", label: "Branch", node: v => v ? listLink({ branch: v }, v) : el("span") },
+  { key: "models", label: "Models", node: modelsNode },
+  { key: "prompts", label: "Prompts", num: true },
+  { key: "llm_calls", label: "Calls", num: true },
+  { key: "tool_calls", label: "Tools", num: true },
+  { key: "compactions", label: "Compact", num: true, cls: v => v ? "warn" : "" },
+  { key: "input_all", label: "Input (all)", num: true, fmt: short, bar: true },
+  { key: "output_tokens", label: "Output", num: true, fmt: short },
+  { key: "cost", label: "Cost", num: true, fmt: money },
+];
+
+async function loadSessions() {
+  const params = new URLSearchParams({ ...route.filters, days });
+  const d = await getJSON(`api/sessions?${params}`);
+  setText("f-count", `${d.sessions.length}${d.sessions.length >= 500 ? "+" : ""} sessions active in this range`);
+  setText("updated", "");
+  renderChips("sessions", { project: homeless, run: v => v.length > 24 ? v.slice(0, 24) + "…" : v });
+  table("t-list", listColumns, d.sessions, "ended", { href: sessionHref, empty: "no sessions match" });
+}
+
+function synopsis(d) {
+  const s = d.session, run = d.run, kinds = Object.fromEntries(d.kinds.map(k => [k.kind, k.n]));
+  const box = document.getElementById("d-synopsis");
+  const lines = [];
+  const models = d.models.map(m => `${m.model.replace(/^[a-z-]+\//, "")} (${short(m.calls)})`).join(", ");
+  lines.push(`${SOURCE_NAMES[s.source] || s.source} session in ${homeless(s.project) || "an unknown directory"}` +
+    `${s.branch ? ` on branch ${s.branch}` : ""}, active for ${span(s.started, s.ended)} from ${when(s.started)} to ${when(s.ended)}.`);
+  lines.push(`${plural(s.prompts, "prompt")}, ${plural(s.llm_calls, "LLM call")} on ${models || "no model"}` +
+    `${s.compactions ? `, ${plural(s.compactions, "compaction")}` : ""}${kinds.error ? `, ${plural(kinds.error, "error")}` : ""}.`);
+  const tools = d.tools.filter(t => t.name).slice().sort((a, b) => b.calls - a.calls);
+  if (tools.length) {
+    const top = tools.slice(0, 4).map(t => `${t.name} ${t.calls}`).join(", ");
+    const heavy = d.tools[0];
+    lines.push(`${plural(tools.reduce((n, t) => n + t.calls, 0), "tool call")}, mostly ${top}.` +
+      (heavy && heavy.result_chars ? ` The most output came from ${heavy.name} (${short(heavy.result_chars)} chars).` : ""));
+  }
+  const subagents = d.agents.filter(a => a.agent !== "main");
+  if (subagents.length || d.children.length)
+    lines.push(`Used ${plural(subagents.length + d.children.length, "subagent")}.`);
+  if (s.parent_session_id)
+    lines.push({ text: "Subagent of ", link: { href: sessionHref({ source: s.source, session_id: s.parent_session_id }), text: s.parent_title || s.parent_session_id } });
+  if (run && run.launcher)
+    lines.push(`Part of ${run.launcher} run "${run.name || run.run_id}"${run.status ? ` (${run.status})` : ""}, started ${when(run.started)}.`);
+  if (d.skills.length)
+    lines.push(`Skills: ${d.skills.map(k => `${k.name}${k.loads > 1 ? ` (${k.loads}x)` : ""}`).join(", ")}.`);
+  const meta = d.meta || {};
+  if (meta.lines_added || meta.lines_removed)
+    lines.push(`Changed code: +${short(meta.lines_added || 0)} / -${short(meta.lines_removed || 0)} lines.`);
+  const prs = d.events.filter(e => e.kind === "pr" && e.name);
+  box.replaceChildren();
+  for (const line of lines) {
+    const p = el("p");
+    if (typeof line === "string") p.textContent = line;
+    else { p.append(line.text); const a = el("a", line.link.text); a.href = line.link.href; p.append(a, "."); }
+    box.appendChild(p);
+  }
+  if (prs.length) {
+    const p = el("p", "Pull requests: ");
+    [...new Set(prs.map(e => e.name))].forEach((url, i) => {
+      if (i) p.append(", ");
+      const a = el("a", url.replace(/^https:\/\/github\.com\//, ""));
+      if (/^https:\/\//.test(url)) { a.href = url; a.target = "_blank"; a.rel = "noopener"; }
+      p.appendChild(a);
+    });
+    box.appendChild(p);
+  }
+}
+
+function renderSession(d) {
+  const label = sessionLabel(d.session);
+  document.title = `${label.text} - Agentbox Telemetry`;
+  setText("d-title", label.text);
+  setText("updated", "");
+  const sessionsLink = (changes, text) => { const a = el("a", text, "filter"); a.href = hashFor("#/sessions", changes); a.title = "other sessions with this"; return a; };
+  const ids = document.getElementById("d-ids"), z = d.session;
+  ids.replaceChildren(...[
+    sessionsLink({ source: z.source }, SOURCE_NAMES[z.source] || z.source), el("span", z.session_id),
+    z.project && sessionsLink({ project: z.project }, homeless(z.project)), z.branch && sessionsLink({ branch: z.branch }, `branch ${z.branch}`),
+    z.client_version && el("span", `v${z.client_version}`), z.run_id && sessionsLink({ run: z.run_id }, `run ${z.run_id}`),
+  ].filter(Boolean));
+  synopsis(d.overall ? { ...d, ...d.overall } : d);
+  renderChips("session", { kind: v => v.replace("_", " ") });
+  const f = route.filters;
+  // With a filter on, the tiles count only the matching events.
+  const s = d.scope ? { ...d.session, ...d.scope } : d.session;
+
+  const input = (s.input_all || 0);
+  const kinds = Object.fromEntries(d.kinds.map(k => [k.kind, k.n]));
+  setText("d-duration", span(s.started, s.ended));
+  setText("d-duration-sub", `${when(s.started)} to ${clock(s.ended)}`);
+  setText("d-tokens", short(input + (s.output_tokens || 0)));
+  setText("d-tokens-sub", `${short(input)} in (${pct(s.cached_tokens || 0, input)} cached), ${short(s.output_tokens)} out`);
+  setText("d-cost", money(s.cost));
+  setText("d-cost-sub", s.source === "codex" ? "subscription, not reported" : s.source === "claude" ? (d.scope ? "Claude reports cost per session only" : "reported by Claude for the session") : "sum of per-call cost");
+  setText("d-calls", short(s.llm_calls));
+  setText("d-calls-sub", `${plural(s.prompts, "prompt")}, ${plural(d.scope ? s.compactions : kinds.compaction || 0, "compaction")}`);
+  const failed = d.tools.filter(t => !f.name || t.name === f.name).reduce((n, t) => n + (t.failed || 0), 0);
+  const calls = d.calls.map((c, i) => ({ ...c, i, context: (c.input || 0) + (c.cached || 0) + (c.cache_write || 0) }));
+  const peak = calls.reduce((best, c) => c.context > (best?.context || 0) ? c : best, null);
+  setText("d-tools", short(s.tool_calls));
+  setText("d-tools-sub", `${failed} failed (${pct(failed, s.tool_calls)})`);
+  setText("d-peak", peak ? short(peak.context) : "-");
+  setText("d-peak-sub", peak ? `${peak.agent} at ${clock(peak.ts)}` : "");
+
+  const agents = [...new Set(calls.map(c => c.agent))];
+  chart("c-context", "line", calls.map(c => clock(c.ts)), [
+    ...agents.map((a, i) => ({ label: a === "main" ? "context (main)" : `context (${tail(a, 20)})`, borderColor: PALETTE[i % PALETTE.length],
+      backgroundColor: PALETTE[i % PALETTE.length], pointRadius: 0, borderWidth: 1.5, spanGaps: true,
+      data: calls.map(c => c.agent === a ? c.context : null) })),
+    { label: "output", type: "bar", yAxisID: "y2", backgroundColor: "rgba(255,152,48,.5)", data: calls.map(c => c.output || 0) },
+  ], { y2: true, legend: agents.length <= 8,
+       tooltipTitle: items => items.length ? `call ${items[0].dataIndex + 1}, ${calls[items[0].dataIndex].model || ""}, ${items[0].label}` : "",
+       onClick: (i, ds) => applyFilter(ds < agents.length ? { agent: agents[ds] } : { model: calls[i].model }) });
+
+  const heavyTools = d.tools.filter(t => t.result_chars).slice(0, 12);
+  chart("c-dtools", "bar", heavyTools.map(t => t.name), [
+    { label: "result chars", data: heavyTools.map(t => t.result_chars),
+      backgroundColor: heavyTools.map(t => f.name && f.name !== t.name ? "#2c3235" : "#5794f2") }],
+    { horizontal: true, legend: false, onClick: i => applyFilter({ name: heavyTools[i].name }) });
+
+  const n = { num: true };
+  table("t-dmodels", [
+    { key: "model", label: "Model" }, { key: "calls", label: "Calls", ...n },
+    { key: "input", label: "Input", ...n, fmt: short }, { key: "cached", label: "Cache read", ...n, fmt: short, bar: true },
+    { key: "cache_write", label: "Cache write", ...n, fmt: short }, { key: "output", label: "Output", ...n, fmt: short },
+    { key: "cost", label: "Cost", ...n, fmt: money },
+  ], d.models, "calls", { onclick: r => applyFilter({ model: r.model }), selected: r => r.model === f.model });
+  table("t-dagents", [
+    { key: "agent", label: "Agent", fmt: v => tail(v, 40), title: r => r.agent }, { key: "started", label: "Started", fmt: clock },
+    { key: "ended", label: "Took", fmt: (v, r) => span(r.started, v) }, { key: "calls", label: "Calls", ...n },
+    { key: "tokens", label: "Tokens", ...n, fmt: short, bar: true }, { key: "output", label: "Output", ...n, fmt: short },
+    { key: "cost", label: "Cost", ...n, fmt: money },
+  ], d.agents, "started", { asc: true, onclick: r => applyFilter({ agent: r.agent }), selected: r => r.agent === f.agent });
+  document.getElementById("p-children").hidden = !d.children.length;
+  table("t-dchildren", listColumns.filter(c => !["project", "branch"].includes(c.key)), d.children, "ended", { href: sessionHref });
+  table("t-dtools", [
+    { key: "name", label: "Tool" }, { key: "calls", label: "Calls", ...n },
+    { key: "result_chars", label: "Result chars", ...n, fmt: short, bar: true },
+    { key: "args_chars", label: "Args chars", ...n, fmt: short },
+    { key: "avg_ms", label: "Avg", ...n, fmt: ms },
+    { key: "failed", label: "Fail", ...n, cls: v => v ? "bad" : "" },
+    { key: "truncated", label: "Truncated", ...n, cls: v => v ? "warn" : "" },
+  ], d.tools, "result_chars", { onclick: r => applyFilter({ name: r.name }), selected: r => r.name === f.name });
+
+  const kindSelect = document.getElementById("f-kind");
+  const kindTotal = d.kinds.reduce((n, k) => n + k.n, 0);
+  kindSelect.replaceChildren(el("option", `all kinds (${kindTotal})`), ...d.kinds.map(k => el("option", `${k.kind} (${k.n})`)));
+  [...kindSelect.options].forEach((o, i) => o.value = i ? d.kinds[i - 1].kind : "");
+  if (f.kind && !d.kinds.some(k => k.kind === f.kind)) kindSelect.append(Object.assign(el("option", `${f.kind} (0)`), { value: f.kind }));
+  kindSelect.value = f.kind || "";
+  kindSelect.onchange = () => applyFilter({ kind: kindSelect.value || null });
+  const renderEvents = () => {
+    table("t-devents", [
+      { key: "ts", label: "Time", fmt: clock }, { key: "kind", label: "Kind", node: v => filterLink({ kind: v }, v) },
+      { key: "agent", label: "Agent", node: v => filterLink({ agent: v }, tail(v, 20)), title: r => r.agent },
+      { key: "name", label: "Name", wide: true, node: (v, r) => r.kind === "llm_call"
+          ? (r.model ? filterLink({ model: r.model }, r.model) : el("span", v || ""))
+          : v ? filterLink({ name: v }, v) : el("span") },
+      { key: "tokens", label: "Tokens", ...n, fmt: short },
+      { key: "args_chars", label: "Args chars", ...n, fmt: short },
+      { key: "result_chars", label: "Result chars", ...n, fmt: short, bar: true },
+      { key: "duration_ms", label: "Took", ...n, fmt: ms },
+      { key: "ok", label: "OK", fmt: (v, r) => v === 0 ? (r.outcome || "failed") : v === 1 ? (r.outcome || "ok") : "",
+        cls: v => v === 0 ? "bad" : "" },
+      { key: "original_tokens", label: "Note", fmt: (v, r) => v ? `truncated from ${short(v)} tokens` : r.pre_tokens ? `compacted ${short(r.pre_tokens)} tokens` : "",
+        cls: v => v ? "warn" : "" },
+    ], d.events, null, { empty: "no events match", onclick: inspect });
+  };
+  renderContext(d, calls);
+  renderSkills(d);
+  renderLargest(d);
+  if (route.event) {
+    inspect(d.events.find(e => e.id === route.event) || d.largest.find(e => e.id === route.event) || { id: route.event, kind: "event" });
+    route.event = null;
+  }
+  renderEvents();
+  setText("d-events-note", (d.events.length >= 5000 ? "first 5000 in order" : "in order") + "; click a row to read it from the transcript, an underlined value to filter");
+}
+
+const CONTEXT_LABELS = {
+  prompt: "your prompts", skill: "skills loaded", system_prompt: "system prompt", memory: "memory files (AGENTS.md, CLAUDE.md)",
+  file: "attached files", skill_listing: "skill listing", tool_listing: "tool listings", reminder: "reminders",
+  injected: "injected messages", queued_message: "queued messages", compaction_summary: "compaction summaries",
+};
+const contextLabel = source => source.startsWith("tool:") ? `tool results: ${source.slice(5)}` : CONTEXT_LABELS[source] || source;
+const estTokens = chars => Math.round((chars || 0) / 4);
+
+// The filter that shows the events behind a context source.
+const contextFilter = source => source.startsWith("tool:") ? { name: source.slice(5) } : source === "prompt" ? { kind: "user_prompt" }
+  : source === "skill" ? { kind: "skill" } : { kind: "context", name: source };
+
+function renderContext(d, calls) {
+  const c = d.context || { sources: [] };
+  const thread = route.filters.agent || "main";
+  setText("d-context-thread", thread === "main" ? "main thread" : `agent ${tail(thread, 24)}`);
+  const bySource = {};
+  for (const r of c.sources) {
+    const row = bySource[r.source] ||= { label: contextLabel(r.source), filter: contextFilter(r.source), start: 0, added: 0, items: 0 };
+    row[r.at_start ? "start" : "added"] += estTokens(r.chars);
+    row.items += r.items;
+  }
+  const rows = Object.values(bySource);
+  if (c.first_call) {
+    const known = rows.reduce((n, r) => n + r.start, 0);
+    rows.push({ label: "tool defs + other", start: Math.max(0, (c.first_call_tokens || 0) - known), added: 0, items: null });
+    if (c.output_tokens) rows.push({ label: "model output", start: 0, added: c.output_tokens, items: null });
+  }
+  rows.forEach(r => r.total = r.start + r.added);
+  rows.sort((a, b) => b.total - a.total);
+  const top = rows.filter(r => r.total).slice(0, 14);
+  chart("c-dcontext", "bar", top.map(r => r.label), [
+    { label: "at start", data: top.map(r => r.start), backgroundColor: "#8e8e9e" },
+    { label: "added later", data: top.map(r => r.added), backgroundColor: "#5794f2" },
+  ], { horizontal: true, stacked: true, onClick: i => top[i].filter && applyFilter(top[i].filter) });
+  const total = rows.reduce((n, r) => n + r.total, 0);
+  const mainPeak = Math.max(0, ...calls.filter(x => x.agent === thread).map(x => x.context));
+  setText("d-context-note", !c.first_call ? `No ${thread === "main" ? "main-thread " : ""}LLM call with token counts${thread === "main" ? "" : " for this agent"}.` :
+    `First call carried ${short(c.first_call_tokens)} tokens. Everything listed adds up to about ${short(total)}; peak context was ${short(mainPeak)}. ` +
+    (total > mainPeak * 1.15 ? "The difference is what compaction, truncation or pruning removed, or estimation error." : "Sizes are estimated from characters, so expect some error."));
+  table("t-dcontext", [
+    { key: "label", label: "Source", wide: true },
+    { key: "items", label: "Items", num: true, fmt: v => v == null ? "" : short(v) },
+    { key: "start", label: "At start", num: true, fmt: short },
+    { key: "added", label: "Added", num: true, fmt: short },
+    { key: "total", label: "Est. tokens", num: true, fmt: short, bar: true },
+  ], rows, "total", { empty: "no context data", onclick: r => r.filter && applyFilter(r.filter),
+       selected: r => r.filter && isActive(r.filter) });
+}
+
+function renderSkills(d) {
+  table("t-dskills", [
+    { key: "name", label: "Skill" }, { key: "loads", label: "Loads", num: true },
+    { key: "via", label: "How", fmt: v => (v || "").split(",").map(x => x === "inject" ? "injected" : x === "read" ? "read by agent" : x).join(", ") },
+    { key: "chars", label: "Est. tokens", num: true, fmt: v => v ? short(estTokens(v)) : "-", bar: true },
+    { key: "first", label: "First", fmt: clock },
+    { key: "parts", label: "Files read", fmt: v => v || "", wide: true },
+    { key: "agents", label: "Agents", fmt: v => tail(v || "", 30) },
+  ], d.skills, "first", { asc: true, empty: "no skills used", onclick: r => applyFilter({ kind: "skill", name: r.name }),
+       selected: r => isActive({ kind: "skill", name: r.name }) });
+}
+
+async function renderLargest(d) {
+  const columns = [
+    { key: "ts", label: "Time", fmt: clock }, { key: "kind", label: "Kind", node: v => filterLink({ kind: v }, v) },
+    { key: "name", label: "Name", node: v => v ? filterLink({ name: v }, v) : el("span") },
+    { key: "what", label: "What", wide: true, cls: v => v ? "" : "muted", fmt: v => v ?? "…" },
+    { key: "chars", label: "Est. tokens", num: true, fmt: v => short(estTokens(v)), bar: true },
+  ];
+  const rows = d.largest.map(r => ({ ...r }));
+  const options = { empty: "nothing recorded", onclick: inspect };
+  table("t-dlargest", columns, rows, "chars", options);
+  if (!rows.length) return;
+  try {
+    const { peek } = await getJSON(`api/peek?ids=${rows.map(r => r.id).join(",")}`);
+    rows.forEach(r => r.what = peek[r.id] ?? "");
+    table("t-dlargest", columns, rows, "chars", options);
+  } catch {}
+}
+
+function imageNode(image) {
+  const box = el("span", null, "image");
+  if (!image || !image.data) { box.append(el("span", `[image: ${image?.error || "not available"}]`, "muted")); return box; }
+  const img = el("img"), raw = el("span", image.data, "base64"), toggle = el("button", "Show base64");
+  img.src = `data:${image.media_type};base64,${image.data}`;
+  img.alt = image.media_type;
+  const show = base64 => {
+    raw.style.display = base64 ? "block" : "none";
+    img.style.display = base64 ? "none" : "block";
+    toggle.textContent = base64 ? "Show image" : "Show base64";
+  };
+  toggle.onclick = () => show(raw.style.display === "none");
+  show(false);
+  img.onload = () => meta.textContent = `${image.media_type}, ${img.naturalWidth}x${img.naturalHeight}, ${short(image.data.length * 3 / 4)}B`;
+  const meta = el("span", image.media_type, "meta");
+  box.append(img, raw, toggle, meta);
+  return box;
+}
+
+function block(title, part, images = {}) {
+  const out = [el("h3", title)];
+  if (part == null || part.text === "") { out.push(el("div", "(empty)", "muted")); return out; }
+  const pre = el("pre");
+  part.text.split(/"?\u27e6image (\d+)\u27e7"?/).forEach((piece, i) => {
+    if (i % 2) pre.append(imageNode(images[piece]));
+    else if (piece) pre.append(piece);
+  });
+  out.push(pre);
+  if (part.truncated) out.push(el("div", `Showing the first ${short(part.text.length)} of ${short(part.chars)} characters.`, "note"));
+  return out;
+}
+
+async function inspect(r) {
+  const box = document.getElementById("inspector"), body = document.getElementById("i-body");
+  setText("i-title", `${r.kind}${r.name ? " · " + r.name : ""} · ${clock(r.ts)}`);
+  body.replaceChildren(el("div", "Reading the transcript…", "muted"));
+  box.hidden = false;
+  try {
+    const e = await getJSON(`api/event?id=${r.id}`);
+    const parts = [el("div", `${homeless(e.file || "")}${e.line ? ":" + e.line : ""}`, "note")];
+    if (e.missing) parts.push(el("p", e.missing, "warn"));
+    if ("input" in e) parts.push(...block(["tool_call", "tool_exec"].includes(e.kind) || e.key?.endsWith(":skill") ? "Input" : "Content", e.input, e.images));
+    if ("result" in e) parts.push(...block("Result", e.result, e.images));
+    parts.push(el("div", "Read live from the agent's transcript; the telemetry database keeps only sizes.", "note"));
+    body.replaceChildren(...parts);
+  } catch (err) {
+    body.replaceChildren(el("p", "Could not load: " + err.message, "bad"));
+  }
+}
+function closeInspector() {
+  document.getElementById("inspector").hidden = true;
+}
+document.getElementById("i-close").onclick = closeInspector;
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeInspector(); });
+
+function parseRoute() {
+  const [path, query] = location.hash.replace(/^#\/?/, "").split("?");
+  const parts = path.split("/").map(decodeURIComponent);
+  const params = new URLSearchParams(query || "");
+  const view = parts[0] === "sessions" ? "sessions" : parts[0] === "session" && parts[2] ? "session" : "overview";
+  const filters = {};
+  for (const k of [...Object.keys(FILTERS[view]), ...(CONTROLS[view] || [])]) if (params.get(k)) filters[k] = params.get(k);
+  if (view === "session") return { view, source: parts[1], id: parts.slice(2).join("/"), event: Number(filters.event) || null, filters };
+  return { view, filters };
+}
+
+async function load() {
+  const view = route.view;
+  try {
+    if (view === "overview") renderOverview(await getJSON(`api/stats?${new URLSearchParams({ ...route.filters, days })}`));
+    else if (view === "sessions") await loadSessions();
+    else {
+      const { event, ...filters } = route.filters;
+      renderSession(await getJSON(`api/session?${new URLSearchParams({ ...filters, source: route.source, id: route.id })}`));
+    }
+    showError(view, "");
+  } catch (e) {
+    showError(view, "Could not load: " + e.message);
+  }
+}
+
+let lastPath = null;
+function navigate() {
+  route = parseRoute();
+  const moved = currentPath() !== lastPath;
+  lastPath = currentPath();
+  if (route.view === "sessions") {
+    document.getElementById("f-query").value = route.filters.q || "";
+    document.getElementById("f-source").value = route.filters.source || "";
+    document.getElementById("f-subagents").checked = route.filters.subagents === "1";
+  }
+  closeInspector();
+  for (const view of ["overview", "sessions", "session"]) document.getElementById(`view-${view}`).hidden = view !== route.view;
+  document.getElementById("nav-overview").className = route.view === "overview" ? "on" : "";
+  document.getElementById("nav-sessions").className = route.view !== "overview" ? "on" : "";
+  document.getElementById("ranges").style.visibility = route.view === "session" ? "hidden" : "visible";
+  if (route.view !== "session") document.title = "Agentbox Telemetry";
+  if (moved) window.scrollTo(0, 0);
+  load();
+}
+
+let searchTimer;
+document.getElementById("f-query").addEventListener("input", e => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { setQuietly("q", e.target.value.trim()); load(); }, 250);
+});
+document.getElementById("f-source").addEventListener("change", e => applyFilter({ source: e.target.value }));
+document.getElementById("f-subagents").addEventListener("change", e => { setQuietly("subagents", e.target.checked ? "1" : ""); load(); });
+window.addEventListener("hashchange", navigate);
+buildRanges();
+navigate();
+setInterval(() => { if (!document.hidden && route.view !== "sessions") load(); }, 60000);
+</script>
+</body>
+</html>

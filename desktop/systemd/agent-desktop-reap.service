@@ -1,0 +1,7 @@
+[Unit]
+Description=Stop agent desktops nobody holds or watches once idle (agent-desktop reap)
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/bin
+ExecStart=%h/.local/bin/agent-desktop reap

@@ -1,0 +1,8 @@
+[Unit]
+Description=Collect agent token and tool telemetry into ~/.local/state/agentbox-telemetry/events.db
+
+[Service]
+Type=oneshot
+Nice=15
+IOSchedulingClass=idle
+ExecStart=/usr/bin/python3 -I %h/.local/lib/agentbox-telemetry/collect.py collect --quiet

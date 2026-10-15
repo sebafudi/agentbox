@@ -1,0 +1,8 @@
+[Unit]
+Description=noVNC browser gateway for agent desktops (0.0.0.0:6080)
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/websockify --web %h/.local/share/agent-desktop/web --token-plugin TokenFile --token-source %h/.local/share/agent-desktop/tokens 0.0.0.0:6080
+Restart=on-failure
+RestartSec=5

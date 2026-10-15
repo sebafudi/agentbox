@@ -1,0 +1,14 @@
+[Unit]
+Description=Refresh agentbox facts after local configuration changes
+
+[Path]
+PathChanged=%h/.bashrc
+PathChanged=%h/.local/bin
+PathChanged=%h/.local/bin/agentbox-login
+PathChanged=%h/.config/zellij
+PathChanged=%h/.config/zellij/config.kdl
+PathChanged=%h/.config/systemd/user
+Unit=agentbox-facts.service
+
+[Install]
+WantedBy=default.target

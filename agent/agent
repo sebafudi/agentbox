@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# agent - run headless omp agents in the background on agentbox and track them.
+#
+#   agent spawn <name> [-C dir] [-m model] [-t thinking] [-T max-time] [-R hard-cap] <prompt...>
+#                                                        start (survives SSH disconnects)
+#   agent wait <name>                                    block until done, print the answer
+#   agent status [name]                                  table of all runs, or one run
+#   agent logs <name> [-f]                               full output so far
+#   agent stop <name>                                    kill a run
+#   agent take <name>                                    open the run's session interactively in omp
+#   agent rm <name>                                      forget a finished run
+#
+# Each run is a transient systemd user unit `agent-<name>` executing `omp -p`, with its own
+# omp session dir so it can be resumed interactively later. State lives in ~/.omp/runs/<name>/;
+# re-spawning a name moves the previous run to ~/.omp/runs/.archive/<name>-<started>/.
+set -euo pipefail
+
+RUNS="$HOME/.omp/runs"
+mkdir -p "$RUNS"
+
+die() { echo "agent: $*" >&2; exit 1; }
+unit() { echo "agent-$1"; }
+valid() { [[ $1 =~ ^[A-Za-z0-9._-]{1,40}$ ]] || die "name must be 1-40 chars of [A-Za-z0-9._-]"; }
+state() { # running | done | failed | unknown
+  local n=$1 active
+  active=$(systemctl --user is-active "$(unit "$n")" 2>/dev/null || true)
+  case $active in
+    active|activating|deactivating) echo running; return ;;
+  esac
+  if [[ -f $RUNS/$n/exit ]]; then
+    [[ $(<"$RUNS/$n/exit") == 0 ]] && echo done || echo failed
+  else
+    echo unknown
+  fi
+}
+
+cmd=${1:-status}; shift || true
+case $cmd in
+  spawn)
+    name=${1:?usage: agent spawn <name> [-C dir] [-m model] [-t thinking] [-T max-time] [-R hard-cap] <prompt...>}; shift; valid "$name"
+    dir="$HOME/code"; extra=(); unitprops=()
+    while [[ ${1:-} == -* ]]; do
+      case $1 in
+        -C) dir=$2; shift 2 ;;
+        -m) extra+=(--model "$2"); shift 2 ;;
+        -t) extra+=(--thinking "$2"); shift 2 ;;
+        -T) extra+=(--max-time "$2"); shift 2 ;;
+        -R) unitprops+=(-p "RuntimeMaxSec=$2"); shift 2 ;;   # systemd kills the run at this age, no matter what
+        --) shift; break ;;
+        *) die "unknown option $1" ;;
+      esac
+    done
+    (( $# )) || die "missing prompt"
+    [[ $(state "$name") == running ]] && die "agent '$name' is already running"
+    dir=$(cd "$dir" && pwd) || die "no such directory: $dir"
+    d="$RUNS/$name"
+    if [[ -d $d ]]; then  # keep earlier runs (their report + session) instead of overwriting them
+      mkdir -p "$RUNS/.archive"
+      mv "$d" "$RUNS/.archive/$name-$(date -d "@$(cat "$d/started" 2>/dev/null || date +%s)" +%Y%m%d-%H%M%S)"
+    fi
+    mkdir -p "$d/session"
+    printf '%s\n' "$*" > "$d/prompt"
+    echo "$dir" > "$d/cwd"
+    started=$(date +%s); echo "$started" > "$d/started"
+    systemd-run --user --quiet --collect --unit "$(unit "$name")" "${unitprops[@]}" \
+      --working-directory "$dir" \
+      -E PATH -E PUPPETEER_EXECUTABLE_PATH -E CHROME_PATH -E EDITOR -E VISUAL \
+      -E PI_STREAM_IDLE_TIMEOUT_MS=90000 -E PI_STREAM_FIRST_EVENT_TIMEOUT_MS=120000 \
+      -E AGENTBOX_RUN_ID="agent:$name:$started" \
+      -p StandardOutput="file:$d/output.log" -p StandardError="file:$d/stderr.log" \
+      /bin/bash -c 'omp -p --session-dir "$1/session" "${@:3}" "$(cat "$1/prompt")"; rc=$?; echo $rc > "$1/exit"; date +%s > "$1/finished"; exit $rc' \
+      _ "$d" _ "${extra[@]}"
+    echo "started agent '$name' in $dir (unit $(unit "$name"))"
+    ;;
+
+  wait)
+    name=${1:?usage: agent wait <name>}; valid "$name"
+    [[ -d $RUNS/$name ]] || die "no run named '$name'"
+    while [[ $(state "$name") == running ]]; do sleep 2; done
+    cat "$RUNS/$name/output.log" 2>/dev/null
+    st=$(state "$name")
+    [[ $st == done ]] || { echo "--- agent '$name' $st (exit $(cat "$RUNS/$name/exit" 2>/dev/null || echo ?)) ---" >&2; tail -20 "$RUNS/$name/stderr.log" >&2 2>/dev/null; exit 1; }
+    ;;
+
+  status)
+    if [[ -n ${1:-} ]]; then
+      name=$1; valid "$name"; d="$RUNS/$name"; [[ -d $d ]] || die "no run named '$name'"
+      echo "name:    $name"
+      echo "state:   $(state "$name")"
+      echo "cwd:     $(<"$d/cwd")"
+      echo "started: $(date -d "@$(<"$d/started")" '+%F %T')"
+      [[ -f $d/finished ]] && echo "took:    $(( $(<"$d/finished") - $(<"$d/started") ))s"
+      echo "prompt:  $(head -c 300 "$d/prompt")"
+      echo "--- output (last 15 lines) ---"; tail -15 "$d/output.log" 2>/dev/null
+      exit 0
+    fi
+    printf '%-24s %-8s %-8s %s\n' NAME STATE AGE CWD
+    shopt -s nullglob
+    for d in "$RUNS"/*/; do
+      n=$(basename "$d"); now=$(date +%s); s=$(<"$d/started")
+      end=$now; [[ -f $d/finished ]] && end=$(<"$d/finished")
+      printf '%-24s %-8s %-8s %s\n' "$n" "$(state "$n")" "$(( (end - s) / 60 ))m$(( (end - s) % 60 ))s" "$(<"$d/cwd")"
+    done
+    ;;
+
+  logs)
+    name=${1:?usage: agent logs <name> [-f]}; valid "$name"
+    if [[ ${2:-} == -f ]]; then tail -f "$RUNS/$name/output.log"; else cat "$RUNS/$name/output.log" "$RUNS/$name/stderr.log" 2>/dev/null; fi
+    ;;
+
+  stop)
+    name=${1:?usage: agent stop <name>}; valid "$name"
+    systemctl --user stop "$(unit "$name")" 2>/dev/null || true
+    [[ -f $RUNS/$name/exit ]] || { echo 143 > "$RUNS/$name/exit"; date +%s > "$RUNS/$name/finished"; }
+    echo "stopped agent '$name'"
+    ;;
+
+  take)
+    name=${1:?usage: agent take <name>}; valid "$name"; d="$RUNS/$name"
+    [[ -d $d ]] || die "no run named '$name'"
+    [[ $(state "$name") == running ]] && die "agent '$name' is still running; 'agent stop $name' first or wait"
+    cd "$(<"$d/cwd")" && exec omp --session-dir "$d/session" --continue
+    ;;
+
+  rm)
+    name=${1:?usage: agent rm <name>}; valid "$name"
+    [[ $(state "$name") == running ]] && die "agent '$name' is running"
+    rm -rf "${RUNS:?}/$name"; echo "removed '$name'"
+    ;;
+
+  -h|--help|help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) die "unknown command '$cmd' (try: agent help)" ;;
+esac

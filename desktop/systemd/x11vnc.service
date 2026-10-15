@@ -1,0 +1,11 @@
+[Unit]
+Description=VNC view of :99 (localhost:5900 only; reach it via ssh -L)
+PartOf=xdesktop.target
+BindsTo=xvfb.service
+After=openbox.service
+
+[Service]
+ExecStart=/usr/bin/x11vnc -display :99 -localhost -rfbport 5900 -rfbauth %h/.vnc/passwd -forever -shared -quiet
+# x11vnc exits 2 when it catches SIGTERM
+SuccessExitStatus=2
+Restart=on-failure

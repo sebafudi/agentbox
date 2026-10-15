@@ -1,0 +1,11 @@
+[Unit]
+Description=Keep agentbox session picker cache warm
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=15s
+AccuracySec=1s
+Unit=agentbox-login-refresh.service
+
+[Install]
+WantedBy=timers.target

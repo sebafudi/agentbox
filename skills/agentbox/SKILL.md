@@ -41,7 +41,8 @@ The values below are the original box's, with private details replaced by exampl
 - [references/history.md](references/history.md): design decisions and why, plus known quirks.
 - [references/automations.md](references/automations.md): timers and services that run without anyone logged in, and lessons for building new automations.
 - [references/clipboard-image-paste.md](references/clipboard-image-paste.md): parked research on pasting clipboard images from a Mac into agents running over SSH.
-- The SSH workspace (`agentbox-login`) and the facts collector are in this repository under `login/`; their README is the source of truth for keys and behavior.
+- This repository holds the components the skill describes, each with a README: `login/` (SSH workspace and facts collector), `desktop/` (agent desktops), `scheduler/` (agent scheduler), `agent/` (background agents), `hub/` (services hub), `telemetry/` (token telemetry). Their READMEs are the source of truth for keys and behavior.
+- Companion skills: `skills/agent-desktop/` (using the desktops) and `skills/agent-scheduler/` (creating and operating scheduled jobs).
 
 ## Keeping this skill current
 
@@ -140,12 +141,12 @@ A systemd unit with a fixed PATH that omits mise shims must name the pinned runt
 
 Not running by default, to save RAM.
 
-- **Slot 0**: `xdesktop.target` = Xvfb `:99` (1920x1080) + openbox + x11vnc on `127.0.0.1:5900`. Start it, export `DISPLAY=:99`, stop it when done. An agent doing computer use needs `DISPLAY=:99` in its own process environment.
+- **Slot 0**: `xdesktop.target` = Xvfb `:99` (1920x1080) + openbox + x11vnc on `127.0.0.1:5900`. Start it, export `DISPLAY=:99`, stop it when done. An agent doing computer use needs `DISPLAY=:99` in its own process environment. Code: `desktop/`; usage: skill `agent-desktop`.
 - **Per-agent desktops**: an `agent-desktop` command manages slots 1-9, each an `agent-desktop@N.target` = Xvfb `:10N` (1280x800) + openbox + tint2 taskbar + x11vnc on `127.0.0.1:590N`. Commands: `list`, `start [N]`, `stop N`, `run N -- CMD`, `shot N`, `url N`, plus screen reading and acting (`tree`, `locate`, `click`, `ocr`, `zoom`, `clickxy`, `type`, `key`, `scroll`) backed by the AT-SPI accessibility tree with tesseract OCR as fallback. The a11y bus must be enabled (`org.a11y.Status IsEnabled=true`) or AT-SPI sees no apps.
 - `agent-desktop browser N [URL]` starts Chromium in the slot as a transient unit with its own profile, `--force-renderer-accessibility` and a DevTools port; `agent-desktop agent N claude|codex|omp` runs an agent on the slot with chrome-devtools-mcp attached. Reading order that works best: MCP, then accessibility tree, then OCR, then screenshots.
 - **Watching**: websockify + noVNC serve every slot in the browser on port 6080, with an index of running desktops. x11vnc on slots 1-9 starts view-only; a small control API (port 6081, VNC password auth) backs a switch bar injected into noVNC: take control, pause agents (freezes their scopes with `systemctl --user freeze`), grant or deny requests, free or stop a slot.
 - **Idle reaper**: a 5-minute timer stops slots that no live agent holds and nobody watches after 60 idle minutes (10 when available RAM is low). Slot 0 is never reaped.
-- **Named slots**: slots 1-9 are throwaway (profiles may be wiped or reused). Anything that needs a persistent login gets its own named, high-numbered slot, one per purpose.
+- **Named slots**: slots 1-9 are throwaway (profiles may be wiped or reused). Anything that needs a persistent login gets its own named slot (20-99), one per purpose, declared as `name=NN` in `~/.config/agent-desktop/slots`.
 
 ## Networking and remote access
 

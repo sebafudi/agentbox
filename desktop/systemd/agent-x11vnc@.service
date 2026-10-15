@@ -1,0 +1,10 @@
+[Unit]
+Description=VNC view of :10%i (127.0.0.1:590%i; browser access via agent-desktop-web)
+PartOf=agent-desktop@%i.target
+BindsTo=agent-xvfb@%i.service
+After=agent-openbox@%i.service
+
+[Service]
+ExecStart=/usr/bin/x11vnc -display :10%i -localhost -rfbport 590%i -rfbauth %h/.vnc/passwd -viewonly -forever -shared -quiet
+SuccessExitStatus=2
+Restart=on-failure

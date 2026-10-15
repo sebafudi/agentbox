@@ -1,0 +1,7 @@
+[Unit]
+Description=Refresh ~/.omp/agent/machine-state.md (agentbox live state for agents)
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:%h/.local/share/mise/shims:/usr/local/sbin:/usr/local/bin:/usr/bin
+ExecStart=%h/.local/bin/agentbox-facts --quiet

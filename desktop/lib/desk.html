@@ -1,0 +1,7 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Agent desktop</title>
+<script>
+  const slot = new URLSearchParams(location.search).get('slot') ?? '1';
+  location.replace(`vnc.html?autoconnect=1&resize=scale&path=websockify%3Ftoken%3Dd${slot}`);
+</script>

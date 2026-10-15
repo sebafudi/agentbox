@@ -1,0 +1,861 @@
+#!/usr/bin/env bash
+# Virtual X desktops for agents, viewable in a browser over Tailscale and the LAN.
+#
+# Slot 0 is the original xdesktop (:99, 1920x1080). Slots 1-9 are agent desktops
+# (:101-:109, 1280x800, taskbar at the bottom), one per agent so several can work side by side.
+# Named slots are persistent, purpose-bound desktops outside 1-9 (e.g. one whose browser stays
+# logged in somewhere), never handed out by `start`. ~/.config/agent-desktop/slots maps each
+# name to an internal number 20-99, one "name=number" line each (# starts a comment); slot NN
+# gets display :10NN, VNC 590NN and DevTools port 9210+NN (slot 20: :1020, 59020, 9230).
+#
+# Desktops
+#   list                                 running desktops, holders and browser URLs
+#   start [N]                            start slot N (default: first free 1-9; N may be a name)
+#   stop N                               stop slot N
+#   reap [--idle MIN] [--low-mem MIN] [--dry-run]
+#                                        stop slots 1-9 nobody holds or watches once idle for MIN
+#                                        minutes (default 60; 10 when RAM available < 3 GiB).
+#                                        Run by agent-desktop-reap.timer
+#   url N                                browser URLs (Tailscale, LAN, AGENT_DESKTOP_PUBLIC_HOST) for N
+#   run N -- CMD...                      start slot N if needed, run CMD with its DISPLAY
+#   agent N CMD [ARGS...]                run an agent (claude, codex, omp) on slot N; claude and
+#                                        codex also get the desktop-browser MCP for that slot
+#   browser N [URL] [--reuse]            open URL in the slot's Chromium (accessibility on,
+#                                        DevTools protocol on 127.0.0.1:922N); a new tab, or the
+#                                        current tab with --reuse
+#
+# Sharing (a slot belongs to the agent that first used it; it ends when that agent process exits)
+#   status N [--json]                    holders, idle time, pending requests, pause and input state
+#   claim N                              take a free slot (actions on a slot claim it implicitly)
+#   release N                            leave the slot (holder; --force: owner only, clears all)
+#   request N REASON [--wait SECS]       ask the holders to share the slot; never granted automatically.
+#                                        Waits (default 90s) for grant/deny/release; rerun to re-check
+#   requests N                           pending requests for the slot
+#   grant N PID | deny N PID             a holder answers: grant = the requester joins as a co-holder
+#                                        (--force: owner only)
+#   wait N [SECS]                        wait until the owner resumes agents on slot N
+#
+# Owner switches (also on the toolbar at the top of the browser view)
+#   input N on|off                       let the owner's mouse/keyboard through (off by default)
+#   block N on|off                       pause agents: actions refuse, the desktop-browser MCP freezes
+#
+# Reading the screen (cheapest first)
+#   tree N [--all] [--grep TEXT]         accessibility tree: on-screen elements + click points
+#   locate N TEXT [--role R] [--exact] [--ocr|--no-ocr]
+#                                        find TEXT in the accessibility tree, else by OCR
+#   ocr N [X0 Y0 X1 Y1]                  OCR text lines with click points
+#   shot N [FILE]                        full screenshot (default /tmp/desktop-N.png)
+#   zoom N X0 Y0 X1 Y1 [FILE]            region screenshot enlarged 2x for small text
+#
+# Reading the whole web page (the browser's active tab, including what is scrolled off screen)
+#   page N [--text [--max CHARS]]        title, URL, size and heading outline (--text: all page text)
+#   find N TEXT [--exact] [--kind K] [--ax] [--all]
+#                                        TEXT anywhere on the page: links, buttons and form fields (by
+#                                        label or placeholder) first, then other clickable elements,
+#                                        then plain text only when nothing else matches; with target,
+#                                        where it is and the sentence around it. Lists up to 15 targets,
+#                                        repeats of a link folded into one line (--all: every match).
+#                                        --kind link|button|field|clickable|text|any narrows or widens
+#                                        it; --ax searches the accessibility tree (slower, sees shadow DOM)
+#   show N TEXT [--nth K] [--exact] [--kind K] [--ax]
+#                                        scroll a match (text too) into view and print where it is now
+#   ready N [SECS]                       wait until the page has finished loading (default 15s)
+#
+# Acting
+#   click N TEXT [--nth K] [--role R] [--exact] [--ocr] [--double|--right] [--wait]
+#                                        locate TEXT on screen, then click its center; an exact name
+#                                        shared with static text resolves to the link or button
+#   click N TEXT --page [--nth K] [--exact] [--kind K] [--ax] [--double|--right] [--wait]
+#                                        find TEXT anywhere on the page (as `find`), scroll it into
+#                                        view, then click it (--kind and --ax imply --page)
+#                                        --wait: if the click navigates, wait for the new page
+#   clickxy N X Y [--double|--right] [--wait]
+#                                        click screen coordinates
+#   type N TEXT                          type into the focused element
+#   key N KEY...                         press keys, e.g. ctrl+l Return
+#   scroll N up|down [CLICKS] [X Y]      scroll the wheel, optionally over a point
+
+set -euo pipefail
+
+STATE="$HOME/.local/share/agent-desktop"
+WEB="$STATE/web"
+NOVNC=/usr/share/webapps/novnc
+SCREEN_PY="$HOME/.local/lib/agent-desktop/screen.py"
+PAGE_PY="$HOME/.local/lib/agent-desktop/page.py"
+ACTLOG_PY="$HOME/.local/lib/agentbox-telemetry/actlog.py"
+RUNLOG_PY="$HOME/.local/lib/agentbox-telemetry/runlog.py"
+WEB_PORT=6080
+LAN_HOST="${AGENT_DESKTOP_LAN_HOST:-$(uname -n).local}"
+SLOTS_FILE="${AGENT_DESKTOP_SLOTS:-$HOME/.config/agent-desktop/slots}"
+
+RUNTIME="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/agent-desktop"
+AGENT_COMMS="claude|codex|omp|opencode|gemini|aider|goose"
+REQUEST_TTL=1800
+
+die() { echo "agent-desktop: $*" >&2; exit 1; }
+fail() { local code="$1"; shift; echo "agent-desktop: $*" >&2; exit "$code"; }
+
+# Named slots from $SLOTS_FILE as "name number" pairs; commands take either the name or the number.
+NAMED=()
+if [ -f "$SLOTS_FILE" ]; then
+  while read -r line; do
+    line="${line%%#*}"; line="${line//[[:space:]]/}"
+    [ -n "$line" ] || continue
+    if [[ "$line" =~ ^([a-z][a-z0-9_-]*)=([2-9][0-9])$ ]]; then
+      NAMED+=("${BASH_REMATCH[1]} ${BASH_REMATCH[2]}")
+    elif [ -t 2 ]; then
+      echo "agent-desktop: ignoring bad line in $SLOTS_FILE: $line (want name=20..99)" >&2
+    fi
+  done <"$SLOTS_FILE"
+fi
+NAMED_NUMS=""
+for pair in "${NAMED[@]}"; do NAMED_NUMS+=" ${pair#* }"; done
+ALL_SLOTS="0 1 2 3 4 5 6 7 8 9$NAMED_NUMS"
+slot_number() { local p; for p in "${NAMED[@]}"; do [ "${p% *}" = "$1" ] && { echo "${p#* }"; return 0; }; done; return 1; }
+slot_name() { local p; for p in "${NAMED[@]}"; do [ "${p#* }" = "$1" ] && { echo "${p% *}"; return; }; done; echo "$1"; }
+check_slot() {
+  [[ "${1:-}" =~ ^[0-9]$ ]] && return 0
+  [[ " $NAMED_NUMS " == *" ${1:-x} "* ]] && return 0
+  die "slot must be 0-9 or a named slot from $SLOTS_FILE"
+}
+check_pid() { [[ "${1:-}" =~ ^[0-9]+$ ]] || die "not a pid: ${1:-}"; }
+check_int() { local v; for v in "$@"; do [[ "$v" =~ ^[0-9]+$ ]] || die "not a number: $v"; done; }
+display_of() { [ "$1" = 0 ] && echo ":99" || echo ":10$1"; }
+size_of() { [ "$1" = 0 ] && echo "1920x1080" || echo "1280x800"; }
+vnc_port_of() { echo "590$1"; }
+cdp_port_of() { [ "$1" -ge 20 ] && echo $((9210 + $1)) || echo "922$1"; }
+unit_of() { [ "$1" = 0 ] && echo "xdesktop.target" || echo "agent-desktop@$1.target"; }
+browser_unit_of() { echo "agent-desktop-$1-chromium.service"; }
+profile_of() { echo "$HOME/.local/state/agent-desktop/chromium-$1"; }
+is_running() { systemctl --user is-active --quiet "$(unit_of "$1")"; }
+require_running() { is_running "$1" || die "slot $1 is not running (agent-desktop start $1)"; }
+host_ip() { tailscale ip -4 2>/dev/null | head -1; }
+vnc_path() { echo "vnc.html?autoconnect=1&resize=scale&path=websockify%3Ftoken%3Dd$1"; }
+url_of() { echo "http://$(host_ip):$WEB_PORT/$(vnc_path "$1")"; }
+lan_url_of() { echo "http://$LAN_HOST:$WEB_PORT/$(vnc_path "$1")"; }
+# Optional public HTTPS hostname for the noVNC web (e.g. a tunnel behind an auth proxy that also
+# routes /api/ to the control API); empty means none and no public URL is printed.
+PUBLIC_WEB_HOST="${AGENT_DESKTOP_PUBLIC_HOST:-}"
+public_url_of() { [ -z "$PUBLIC_WEB_HOST" ] || echo "https://$PUBLIC_WEB_HOST/$(vnc_path "$1")"; }
+on_display() { local n="$1"; shift; DISPLAY="$(display_of "$n")" "$@"; }
+
+screen_py() {
+  local n="$1"; shift
+  /usr/bin/python3 -I "$SCREEN_PY" --display "$(display_of "$n")" --size "$(size_of "$n")" "$@"
+}
+
+enable_a11y() {
+  busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled b true 2>/dev/null || true
+}
+
+proc_field() {
+  local stat fields
+  stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1
+  read -r -a fields <<<"${stat##*) }"
+  echo "${fields[$2]}"
+}
+proc_start() { proc_field "$1" 19; }
+proc_alive() { [ -n "${2:-}" ] && [ "$(proc_start "$1")" = "$2" ]; }
+
+caller() {
+  local pid="${AGENT_DESKTOP_OWNER:-}" p comm
+  CALLER_IS_AGENT=0
+  if [ -n "$pid" ]; then
+    CALLER_IS_AGENT=1
+  else
+    p="$PPID"
+    while [ -n "$p" ] && [ "$p" -gt 1 ]; do
+      comm="$(cat "/proc/$p/comm" 2>/dev/null)" || break
+      if [[ "$comm" =~ ^($AGENT_COMMS)$ ]]; then pid="$p"; CALLER_IS_AGENT=1; break; fi
+      p="$(proc_field "$p" 1)" || break
+    done
+    [ -n "$pid" ] || pid="$(ps -o sid= -p $$ | tr -d ' ')"
+  fi
+  CALLER_PID="$pid"
+  CALLER_START="$(proc_start "$pid")"
+  CALLER_NAME="$(cat "/proc/$pid/comm" 2>/dev/null || echo unknown)"
+}
+
+slot_dir() { echo "$RUNTIME/$1"; }
+lock_slot() { mkdir -p "$(slot_dir "$1")/requests"; exec 8>"$(slot_dir "$1")/.lock"; flock 8; }
+unlock_slot() { flock -u 8; }
+
+# holders file: one line per agent sharing the slot, "pid start name since active".
+load_holders() {
+  HOLDERS=()
+  local f pid start rest
+  f="$(slot_dir "$1")/holders"
+  [ -f "$f" ] || return 1
+  while read -r pid start rest; do
+    if [ -n "$pid" ] && proc_alive "$pid" "$start"; then HOLDERS+=("$pid $start $rest"); fi
+  done <"$f"
+  [ ${#HOLDERS[@]} -gt 0 ]
+}
+
+save_holders() {
+  local f; f="$(slot_dir "$1")/holders"
+  if [ ${#HOLDERS[@]} -eq 0 ]; then rm -f "$f"; return; fi
+  printf '%s\n' "${HOLDERS[@]}" >"$f.tmp" && mv "$f.tmp" "$f"
+}
+
+holds() {
+  local h
+  for h in "${HOLDERS[@]}"; do [ "${h%% *}" = "$1" ] && return 0; done
+  return 1
+}
+
+add_holder() {
+  local n="$1" pid="$2" start="$3" name="$4" now
+  now="$(date +%s)"
+  holds "$pid" || HOLDERS+=("$pid $start $name $now $now")
+  save_holders "$n"
+}
+
+remove_holder() {
+  local n="$1" pid="$2" kept=() h
+  for h in "${HOLDERS[@]}"; do [ "${h%% *}" = "$pid" ] || kept+=("$h"); done
+  HOLDERS=("${kept[@]}")
+  save_holders "$n"
+}
+
+touch_holder() {
+  local n="$1" pid="$2" i fields
+  for i in "${!HOLDERS[@]}"; do
+    read -r -a fields <<<"${HOLDERS[$i]}"
+    [ "${fields[0]}" = "$pid" ] && HOLDERS[i]="${fields[0]} ${fields[1]} ${fields[2]} ${fields[3]} $(date +%s)"
+  done
+  save_holders "$n"
+}
+
+ago() { local s=$(( $(date +%s) - $1 )); [ "$s" -lt 120 ] && echo "${s}s" || echo "$((s / 60))m"; }
+
+holders_text() {
+  local h pid name active out=""
+  for h in "${HOLDERS[@]}"; do
+    read -r pid _ name _ active <<<"$h"
+    out="${out:+$out, }$name (pid $pid, active $(ago "$active") ago)"
+  done
+  echo "$out"
+}
+
+claim_slot() {
+  local n="$1"
+  caller
+  lock_slot "$n"
+  if load_holders "$n" && ! holds "$CALLER_PID"; then
+    unlock_slot
+    fail 5 "slot $n is held by $(holders_text). Do not use it. Use a free slot (agent-desktop start), or ask to share it: agent-desktop request $n \"<why you need it>\""
+  fi
+  if holds "$CALLER_PID"; then touch_holder "$n" "$CALLER_PID"; else add_holder "$n" "$CALLER_PID" "$CALLER_START" "$CALLER_NAME"; fi
+  unlock_slot
+}
+
+# "last" = "pid name time" of the latest action; sharing agents are warned when someone else acted.
+warn_if_others_acted() {
+  local n="$1" pid name at
+  [ -f "$(slot_dir "$n")/last" ] || return 0
+  read -r pid name at <"$(slot_dir "$n")/last" || return 0
+  [ "$pid" != "$CALLER_PID" ] && holds "$pid" || return 0
+  [ $(( $(date +%s) - at )) -lt 900 ] || return 0
+  echo "agent-desktop: $name (pid $pid) shares slot $n and acted $(ago "$at") ago; the screen may have changed, look again before acting" >&2
+}
+
+is_blocked() { [ -f "$(slot_dir "$1")/blocked" ]; }
+
+# Request files: requests/<pid> = "pid start name created" then the reason, then "denied" once denied.
+live_requests() {
+  local n="$1" f pid start name created now
+  now="$(date +%s)"
+  for f in "$(slot_dir "$n")"/requests/*; do
+    [ -f "$f" ] || continue
+    read -r pid start name created <"$f" || true
+    if ! proc_alive "$pid" "$start" || [ $((now - ${created:-0})) -gt "$REQUEST_TTL" ]; then
+      rm -f "$f"; continue
+    fi
+    grep -qx denied "$f" && continue
+    echo "$pid $name $(ago "$created") $(sed -n 2p "$f")"
+  done
+}
+
+notify_requests() {
+  local n="$1" pid name age reason
+  holds "${CALLER_PID:-x}" || return 0
+  while read -r pid name age reason; do
+    [ -n "$pid" ] || continue
+    echo "agent-desktop: $name (pid $pid) asks for slot $n (${age} ago): $reason" >&2
+    echo "  answer at a safe point: agent-desktop grant $n $pid (you then share the slot) or agent-desktop deny $n $pid" >&2
+  done < <(live_requests "$n")
+}
+
+# Input actions (click, type, ...) also pass "serial": they run one at a time per slot.
+require_action() {
+  local n="$1"
+  require_running "$n"
+  is_blocked "$n" && fail 4 "the owner paused agents on slot $n. Do not work around it; run: agent-desktop wait $n, then retry"
+  claim_slot "$n"
+  if [ "${2:-}" = serial ]; then exec 7>"$(slot_dir "$n")/.act"; flock 7; fi
+  warn_if_others_acted "$n"
+  echo "$CALLER_PID $CALLER_NAME $(date +%s)" >"$(slot_dir "$n")/last"
+  notify_requests "$n"
+}
+
+note_reader() {
+  caller
+  load_holders "$1" || return 0
+  holds "$CALLER_PID" || return 0
+  warn_if_others_acted "$1"
+  notify_requests "$1"
+}
+
+require_holder_or_force() {
+  local n="$1" force="$2"
+  caller
+  load_holders "$n" || true
+  holds "$CALLER_PID" && return 0
+  if [ "$force" = 1 ]; then
+    [ "$CALLER_IS_AGENT" = 0 ] && return 0
+    fail 5 "--force is for the human owner, not agents"
+  fi
+  [ ${#HOLDERS[@]} -gt 0 ] || fail 1 "slot $n has no holder"
+  fail 5 "only a holder ($(holders_text)) can do that"
+}
+
+mcp_scopes() { echo "agent-desktop-$1-mcp-*.scope"; }
+
+set_block() {
+  local n="$1" on="$2"
+  mkdir -p "$(slot_dir "$n")"
+  if [ "$on" = on ]; then
+    touch "$(slot_dir "$n")/blocked"
+    systemctl --user freeze "$(mcp_scopes "$n")" 2>/dev/null || true
+  else
+    rm -f "$(slot_dir "$n")/blocked"
+    systemctl --user thaw "$(mcp_scopes "$n")" 2>/dev/null || true
+  fi
+}
+
+user_input_on() {
+  [ "$(x11vnc -display "$(display_of "$1")" -Q viewonly 2>/dev/null | sed -n 's/^ans=viewonly://p')" = 0 ]
+}
+
+status_json() {
+  local n="$1" running=false blocked=false input=false
+  is_running "$n" && running=true
+  is_blocked "$n" && blocked=true
+  [ "$running" = true ] && user_input_on "$n" && input=true
+  load_holders "$n" || true
+  live_requests "$n" | /usr/bin/python3 -I -c '
+import json, sys
+slot, label, running, blocked, user_input, *holder_lines = sys.argv[1:]
+requests = []
+for line in sys.stdin:
+    rpid, rname, age, *reason = line.rstrip("\n").split(" ")
+    requests.append({"pid": int(rpid), "name": rname, "age": age, "reason": " ".join(reason)})
+holders = []
+for line in holder_lines:
+    pid, _start, name, since, active = line.split(" ")
+    holders.append({"pid": int(pid), "name": name, "since": int(since), "active": int(active)})
+print(json.dumps({"slot": int(slot), "label": label, "running": running == "true", "agents_blocked": blocked == "true",
+                  "user_input": user_input == "true", "holders": holders, "requests": requests}))
+' "$n" "$(slot_name "$n")" "$running" "$blocked" "$input" "${HOLDERS[@]}"
+}
+
+setup_web() {
+  mkdir -p "$WEB"
+  for f in app core vendor vnc_lite.html package.json; do
+    [ -e "$WEB/$f" ] || ln -s "$NOVNC/$f" "$WEB/$f"
+  done
+  for f in desk.html agent-controls.js; do
+    [ -e "$WEB/$f" ] || ln -s "$HOME/.local/lib/agent-desktop/$f" "$WEB/$f"
+  done
+  # ?v=<mtime> busts browser caches whenever agent-controls.js changes.
+  local v; v=$(stat -Lc %Y "$HOME/.local/lib/agent-desktop/agent-controls.js")
+  sed "s#</head>#<script type=\"module\" src=\"agent-controls.js?v=$v\"></script>\n</head>#" "$NOVNC/vnc.html" >"$WEB/vnc.html.tmp"
+  mv -f "$WEB/vnc.html.tmp" "$WEB/vnc.html"
+  : >"$STATE/tokens.tmp"
+  for n in $ALL_SLOTS; do echo "d$n: localhost:$(vnc_port_of "$n")" >>"$STATE/tokens.tmp"; done
+  mv "$STATE/tokens.tmp" "$STATE/tokens"
+}
+
+write_index() {
+  local rows="" n
+  for n in $ALL_SLOTS; do
+    is_running "$n" || continue
+    rows+="<li><a href=\"$(vnc_path "$n")\">Desktop $(slot_name "$n")</a> <code>DISPLAY=$(display_of "$n")</code></li>"
+  done
+  [ -n "$rows" ] || rows="<li>No desktops running. Start one with <code>agent-desktop start</code>.</li>"
+  cat >"$WEB/index.html.tmp" <<EOF
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>agentbox desktops</title><meta http-equiv="refresh" content="15">
+<style>body{font:16px system-ui;margin:2rem;background:#111;color:#ddd}a{color:#89b4fa}code{color:#a6e3a1}</style>
+<h1>agentbox desktops</h1><ul>$rows</ul>
+EOF
+  mv "$WEB/index.html.tmp" "$WEB/index.html"
+}
+
+ensure_web() {
+  setup_web
+  write_index
+  systemctl --user start agent-desktop-web.service agent-desktop-control.service
+}
+
+wait_for_x() {
+  local sock
+  sock="/tmp/.X11-unix/X$(display_of "$1" | tr -d :)"
+  for _ in $(seq 50); do [ -S "$sock" ] && return 0; sleep 0.1; done
+  die "display $(display_of "$1") did not come up"
+}
+
+viewers_of() { ss -tnH state established "( dport = :$(vnc_port_of "$1") )" 2>/dev/null | wc -l; }
+
+# Latest sign of life on a slot: its start, the newest action/claim/viewer mark in its runtime dir.
+last_activity() {
+  local n="$1" latest started f t
+  started="$(systemctl --user show -p ActiveEnterTimestamp --value "$(unit_of "$n")")"
+  latest="$(date -d "$started" +%s 2>/dev/null || echo 0)"
+  for f in "$(slot_dir "$n")"/{last,holders,viewed,released}; do
+    [ -f "$f" ] || continue
+    t="$(stat -c %Y "$f")"; [ "$t" -gt "$latest" ] && latest="$t"
+  done
+  echo "$latest"
+}
+
+first_free() {
+  local n
+  for n in 1 2 3 4 5 6 7 8 9; do is_running "$n" || { echo "$n"; return; }; done
+  die "all slots 1-9 are in use"
+}
+
+start_slot() {
+  local n="$1"
+  systemctl --user start "$(unit_of "$n")"
+  wait_for_x "$n"
+  enable_a11y
+  ensure_web
+}
+
+open_browser() {
+  local n="$1" url="${2:-}" port
+  port="$(cdp_port_of "$n")"
+  enable_a11y
+  if [ -n "$url" ] && [ "${3:-}" = reuse ] && systemctl --user is-active --quiet "$(browser_unit_of "$n")"; then
+    page_py "$n" open "$url"
+    return
+  fi
+  if systemctl --user is-active --quiet "$(browser_unit_of "$n")"; then
+    [ -z "$url" ] || on_display "$n" chromium --user-data-dir="$(profile_of "$n")" "$url" >/dev/null 2>&1
+  else
+    systemd-run --user --quiet --collect --unit="$(browser_unit_of "$n")" \
+      -p PartOf="$(unit_of "$n")" -p After="$(unit_of "$n")" \
+      -E DISPLAY="$(display_of "$n")" -E AGENT_DESKTOP="$n" \
+      chromium --user-data-dir="$(profile_of "$n")" --no-first-run --start-maximized \
+      --force-renderer-accessibility \
+      --remote-debugging-address=127.0.0.1 --remote-debugging-port="$port" \
+      "${url:-about:blank}"
+  fi
+  for _ in $(seq 50); do
+    curl -fs "http://127.0.0.1:$port/json/version" >/dev/null 2>&1 && break
+    sleep 0.2
+  done
+  echo "slot $n chromium  DevTools http://127.0.0.1:$port  profile $(profile_of "$n")"
+}
+
+page_py() {
+  local n="$1"; shift
+  /usr/bin/python3 -I "$PAGE_PY" --port "$(cdp_port_of "$n")" --display "$(display_of "$n")" "$@"
+}
+
+click_at() {
+  local n="$1" x="$2" y="$3" mode="${4:-}" button=1 repeat=1
+  case "$mode" in
+    --double) repeat=2 ;;
+    --right) button=3 ;;
+    "") ;;
+    *) die "unknown click option: $mode" ;;
+  esac
+  on_display "$n" xdotool mousemove "$x" "$y" click --repeat "$repeat" "$button"
+}
+
+cmd="${1:-list}"; shift || true
+if [ -n "${1:-}" ] && num="$(slot_number "$1")"; then set -- "$num" "${@:2}"; fi
+if [ "$cmd" = mcp-browser ] && num="$(slot_number "${AGENT_DESKTOP:-}")"; then AGENT_DESKTOP="$num"; fi
+
+# Every short command is recorded once by actlog.py (agentbox telemetry, optional: skipped when it is
+# not installed); long-lived ones that exec are not.
+if [ -z "${AGENT_DESKTOP_LOGGED:-}" ] && [ -f "$ACTLOG_PY" ]; then
+  case "$cmd" in
+    agent|run|mcp-browser|-h|--help|help) ;;
+    *)
+      caller
+      AGENT_DESKTOP_LOGGED=1 CALLER_PID="$CALLER_PID" CALLER_NAME="$CALLER_NAME" CALLER_IS_AGENT="$CALLER_IS_AGENT" \
+        exec /usr/bin/python3 -I "$ACTLOG_PY" agent-desktop -- "$0" "$cmd" "$@"
+      ;;
+  esac
+fi
+case "$cmd" in
+  list)
+    printf '%-5s %-8s %-28s %s\n' SLOT DISPLAY HOLDER URL
+    for n in $ALL_SLOTS; do
+      is_running "$n" || continue
+      holder=free
+      if load_holders "$n"; then holder="$(printf '%s\n' "${HOLDERS[@]}" | awk '{printf "%s%s:%s", (NR > 1 ? "," : ""), $3, $1}')"; fi
+      if is_blocked "$n"; then holder="$holder (paused)"; fi
+      printf '%-5s %-8s %-28s %s\n' "$(slot_name "$n")" "$(display_of "$n")" "$holder" "$(lan_url_of "$n")"
+    done
+    echo "index: http://$(host_ip):$WEB_PORT/ (Tailscale)  http://$LAN_HOST:$WEB_PORT/ (LAN)"
+    ;;
+  start)
+    mkdir -p "$STATE"
+    exec 9>"$STATE/.lock"; flock 9
+    n="${1:-$(first_free)}"; check_slot "$n"
+    is_running "$n" || rm -rf "$(slot_dir "$n")"
+    start_slot "$n"
+    flock -u 9
+    claim_slot "$n"
+    echo "slot $n  DISPLAY=$(display_of "$n")  (held by $CALLER_NAME pid $CALLER_PID; agent-desktop release $n when done)"
+    echo "  tailscale: $(url_of "$n")"
+    echo "  lan:       $(lan_url_of "$n")"
+    [ -z "$PUBLIC_WEB_HOST" ] || echo "  public:    $(public_url_of "$n")"
+    ;;
+  stop)
+    check_slot "${1:-}"
+    if is_running "$1"; then
+      if load_holders "$1"; then
+        require_holder_or_force "$1" "$([ "${2:-}" = --force ] && echo 1 || echo 0)"
+        [ ${#HOLDERS[@]} -le 1 ] || [ "${2:-}" = --force ] || fail 5 "slot $1 is shared with $(holders_text); release it instead (agent-desktop release $1)"
+      fi
+    fi
+    set_block "$1" off
+    systemctl --user stop "$(mcp_scopes "$1")" 2>/dev/null || true
+    systemctl --user stop "$(browser_unit_of "$1")" 2>/dev/null || true
+    systemctl --user stop "$(unit_of "$1")"
+    rm -rf "$(slot_dir "$1")"
+    write_index
+    ;;
+  reap)
+    idle=60 low_mem=10 dry=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --idle|--low-mem) [ $# -ge 2 ] || die "$1 needs minutes"; check_int "$2"
+          [ "$1" = --idle ] && idle="$2" || low_mem="$2"; shift ;;
+        --dry-run) dry=1 ;;
+        *) die "unknown option: $1" ;;
+      esac
+      shift
+    done
+    avail_kb="$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)"
+    limit="$idle" why=""
+    if [ "$avail_kb" -lt $((3 * 1024 * 1024)) ]; then limit="$low_mem" why=" (low memory: $((avail_kb / 1024)) MiB available)"; fi
+    now="$(date +%s)"
+    for n in 1 2 3 4 5 6 7 8 9 $NAMED_NUMS; do
+      is_running "$n" || continue
+      mkdir -p "$(slot_dir "$n")"
+      if load_holders "$n"; then echo "slot $n: kept, held by $(holders_text)"; continue; fi
+      if [ "$(viewers_of "$n")" -gt 0 ]; then touch "$(slot_dir "$n")/viewed"; echo "slot $n: kept, being watched"; continue; fi
+      idle_min=$(( (now - $(last_activity "$n")) / 60 ))
+      if [ "$idle_min" -lt "$limit" ]; then echo "slot $n: kept, idle ${idle_min}m of ${limit}m$why"; continue; fi
+      if [ "$dry" = 1 ]; then echo "slot $n: would stop, idle ${idle_min}m$why"; continue; fi
+      echo "slot $n: stopping, unheld and unwatched for ${idle_min}m$why"
+      AGENT_DESKTOP_LOGGED=1 "$0" stop "$n"
+    done
+    ;;
+  status)
+    n="${1:-}"; check_slot "$n"
+    if [ "${2:-}" = --json ]; then status_json "$n"; exit 0; fi
+    is_running "$n" || { echo "slot $n: not running"; exit 0; }
+    if load_holders "$n"; then echo "slot $n: held by $(holders_text)"; else echo "slot $n: free"; fi
+    is_blocked "$n" && echo "agents: PAUSED by the owner" || echo "agents: allowed"
+    user_input_on "$n" && echo "owner input: on" || echo "owner input: off (view only)"
+    live_requests "$n" | while read -r pid name age reason; do echo "request: $name pid $pid ($age ago): $reason"; done
+    ;;
+  claim)
+    n="${1:-}"; check_slot "$n"; require_running "$n"
+    claim_slot "$n"
+    echo "slot $n: you ($CALLER_NAME pid $CALLER_PID) hold it. Release it when done: agent-desktop release $n"
+    ;;
+  release)
+    n="${1:-}"; check_slot "$n"
+    require_holder_or_force "$n" "$([ "${2:-}" = --force ] && echo 1 || echo 0)"
+    lock_slot "$n"
+    load_holders "$n" || true
+    if holds "$CALLER_PID"; then remove_holder "$n" "$CALLER_PID"; else HOLDERS=(); save_holders "$n"; fi
+    touch "$(slot_dir "$n")/released"
+    unlock_slot
+    [ ${#HOLDERS[@]} -gt 0 ] && echo "you left slot $n; still held by $(holders_text)" || echo "slot $n is free"
+    ;;
+  request)
+    n="${1:-}"; check_slot "$n"; require_running "$n"; shift
+    reason="" wait_s=90
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --wait) [ $# -ge 2 ] || die "--wait needs seconds"; wait_s="$2"; check_int "$wait_s"; shift ;;
+        *) reason="${reason:+$reason }$1" ;;
+      esac
+      shift
+    done
+    caller
+    [ "$CALLER_IS_AGENT" = 1 ] || die "request is for agents; the owner can use: agent-desktop release $n --force"
+    file="$(slot_dir "$n")/requests/$CALLER_PID"
+    lock_slot "$n"
+    if ! load_holders "$n"; then
+      add_holder "$n" "$CALLER_PID" "$CALLER_START" "$CALLER_NAME"; rm -f "$file"; unlock_slot
+      echo "slot $n was free; you hold it now"; exit 0
+    fi
+    holds "$CALLER_PID" && { unlock_slot; echo "you already hold slot $n"; exit 0; }
+    if [ ! -f "$file" ]; then
+      [ -n "$reason" ] || { unlock_slot; die "usage: agent-desktop request N REASON [--wait SECS]"; }
+      printf '%s %s %s %s\n%s\n' "$CALLER_PID" "$CALLER_START" "$CALLER_NAME" "$(date +%s)" "$reason" >"$file"
+    fi
+    unlock_slot
+    deadline=$(( $(date +%s) + wait_s ))
+    while :; do
+      if grep -qx denied "$file" 2>/dev/null; then
+        rm -f "$file"; fail 6 "the holder of slot $n denied your request. Use another slot (agent-desktop start)"
+      fi
+      lock_slot "$n"
+      if ! load_holders "$n"; then
+        add_holder "$n" "$CALLER_PID" "$CALLER_START" "$CALLER_NAME"; rm -f "$file"; unlock_slot
+        echo "slot $n was released; you hold it now"; exit 0
+      fi
+      unlock_slot
+      if holds "$CALLER_PID"; then
+        rm -f "$file"
+        remove_listing=("${HOLDERS[@]}")
+        HOLDERS=()
+        for h in "${remove_listing[@]}"; do [ "${h%% *}" = "$CALLER_PID" ] || HOLDERS+=("$h"); done
+        echo "granted: you now share slot $n with $(holders_text)."
+        echo "Coordinate: actions run one at a time, you get a warning when another holder acted, so look again before acting. Release it as soon as you are done."
+        exit 0
+      fi
+      [ "$(date +%s)" -lt "$deadline" ] || break
+      sleep 2
+    done
+    fail 7 "no answer yet from $(holders_text); your request stays open for $((REQUEST_TTL / 60))m. Rerun the same command to keep waiting, or use another slot"
+    ;;
+  requests)
+    n="${1:-}"; check_slot "$n"
+    live_requests "$n" | while read -r pid name age reason; do echo "$pid $name ($age ago): $reason"; done
+    ;;
+  grant|deny)
+    n="${1:-}"; check_slot "$n"; pid="${2:-}"; check_pid "$pid"
+    require_holder_or_force "$n" "$([ "${3:-}" = --force ] && echo 1 || echo 0)"
+    file="$(slot_dir "$n")/requests/$pid"
+    [ -f "$file" ] || die "no pending request from pid $pid on slot $n"
+    read -r rpid rstart rname _ <"$file"
+    proc_alive "$rpid" "$rstart" || { rm -f "$file"; die "the requester (pid $pid) is gone"; }
+    if [ "$cmd" = deny ]; then
+      echo denied >>"$file"; echo "denied $rname (pid $pid)"
+    else
+      lock_slot "$n"; load_holders "$n" || true; add_holder "$n" "$rpid" "$rstart" "$rname"; rm -f "$file"; unlock_slot
+      echo "$rname (pid $pid) now shares slot $n. Actions run one at a time and each of you is warned when the other acted; look again before acting, and agree who does what if you talk to each other."
+    fi
+    ;;
+  wait)
+    n="${1:-}"; check_slot "$n"; wait_s="${2:-600}"; check_int "$wait_s"
+    deadline=$(( $(date +%s) + wait_s ))
+    while is_blocked "$n"; do
+      [ "$(date +%s)" -lt "$deadline" ] || fail 4 "slot $n is still paused by the owner"
+      sleep 2
+    done
+    echo "slot $n: agents allowed again"
+    ;;
+  input|block)
+    n="${1:-}"; check_slot "$n"
+    case "${2:-}" in on|off) ;; *) die "usage: agent-desktop $cmd N on|off" ;; esac
+    caller
+    [ "$CALLER_IS_AGENT" = 0 ] || fail 5 "$cmd is the owner's switch; agents must not change it"
+    if [ "$cmd" = block ]; then
+      set_block "$n" "$2"
+    else
+      require_running "$n"
+      timeout 10 x11vnc -display "$(display_of "$n")" -sync -R "$([ "$2" = on ] && echo noviewonly || echo viewonly)" >/dev/null 2>&1
+    fi
+    echo "slot $n: $cmd $2"
+    ;;
+  url)
+    check_slot "${1:-}"; ensure_web; url_of "$1"; lan_url_of "$1"; public_url_of "$1"
+    ;;
+  run)
+    n="${1:-}"; check_slot "$n"; shift
+    [ "${1:-}" = "--" ] && shift
+    [ $# -gt 0 ] || die "usage: agent-desktop run N -- CMD..."
+    is_running "$n" || start_slot "$n" >/dev/null
+    require_action "$n"
+    DISPLAY="$(display_of "$n")" AGENT_DESKTOP="$n" QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 exec "$@"
+    ;;
+  agent)
+    n="${1:-}"; check_slot "$n"; shift
+    [ $# -gt 0 ] || die "usage: agent-desktop agent N CMD [ARGS...]"
+    is_running "$n" || start_slot "$n" >/dev/null
+    export AGENT_DESKTOP_OWNER=$$
+    claim_slot "$n"
+    tool="$1"; shift
+    self="$HOME/.local/bin/agent-desktop"
+    DISPLAY="$(display_of "$n")"
+    export DISPLAY AGENT_DESKTOP="$n" QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
+    if [ -z "${AGENTBOX_RUN_ID:-}" ]; then
+      export AGENTBOX_RUN_ID="desktop:$n:$(date +%s)-$$"
+      [ -f "$RUNLOG_PY" ] && /usr/bin/python3 -I "$RUNLOG_PY" start agent-desktop "$(basename "$tool")" slot="$n" || true
+    fi
+    case "$(basename "$tool")" in
+      claude)
+        exec "$tool" "$@" --mcp-config "{\"mcpServers\":{\"desktop-browser\":{\"command\":\"$self\",\"args\":[\"mcp-browser\",\"$n\"]}}}"
+        ;;
+      codex)
+        exec "$tool" -c "mcp_servers.desktop-browser.command=\"$self\"" \
+          -c "mcp_servers.desktop-browser.args=[\"mcp-browser\",\"$n\"]" "$@"
+        ;;
+      *) exec "$tool" "$@" ;;
+    esac
+    ;;
+  mcp-browser)
+    n="${1:-${AGENT_DESKTOP:-}}"; check_slot "$n"; require_running "$n"
+    claim_slot "$n"
+    scope="agent-desktop-$n-mcp-$$.scope"
+    if is_blocked "$n"; then (sleep 2; systemctl --user freeze "$scope") >/dev/null 2>&1 & fi
+    exec systemd-run --user --scope --quiet --collect --unit="$scope" -- \
+      mise exec node@24 -- npx -y chrome-devtools-mcp@latest --browserUrl "http://127.0.0.1:$(cdp_port_of "$n")"
+    ;;
+  browser)
+    n="${1:-}"; check_slot "$n"
+    is_running "$n" || start_slot "$n" >/dev/null
+    shift
+    url="" reuse=""
+    for arg in "$@"; do
+      case "$arg" in
+        --reuse) reuse=reuse ;;
+        -*) die "unknown option: $arg" ;;
+        *) url="$arg" ;;
+      esac
+    done
+    require_action "$n"
+    open_browser "$n" "$url" "$reuse"
+    ;;
+  page)
+    n="${1:-}"; check_slot "$n"; shift; require_running "$n"
+    note_reader "$n"
+    page_py "$n" page "$@"
+    ;;
+  find)
+    n="${1:-}"; check_slot "$n"; shift; require_running "$n"
+    [ -n "${1:-}" ] || die "usage: agent-desktop find N TEXT [--exact]"
+    note_reader "$n"
+    page_py "$n" find "$@"
+    ;;
+  show)
+    n="${1:-}"; check_slot "$n"; shift; require_action "$n" serial
+    [ -n "${1:-}" ] || die "usage: agent-desktop show N TEXT [--nth K] [--exact] [--kind K] [--ax]"
+    page_py "$n" show "$@"
+    ;;
+  ready)
+    n="${1:-}"; check_slot "$n"; require_running "$n"
+    secs="${2:-15}"; check_int "$secs"
+    note_reader "$n"
+    page_py "$n" --timeout "$secs" ready
+    ;;
+  tree)
+    n="${1:-}"; check_slot "$n"; shift; require_running "$n"
+    note_reader "$n"
+    screen_py "$n" tree "$@"
+    ;;
+  locate)
+    n="${1:-}"; check_slot "$n"; shift; require_running "$n"
+    [ -n "${1:-}" ] || die "usage: agent-desktop locate N TEXT [--role R] [--exact] [--ocr|--no-ocr]"
+    note_reader "$n"
+    screen_py "$n" locate "$@"
+    ;;
+  ocr)
+    n="${1:-}"; check_slot "$n"; shift; require_running "$n"
+    [ $# -eq 0 ] || { [ $# -eq 4 ] && check_int "$@"; } || die "usage: agent-desktop ocr N [X0 Y0 X1 Y1]"
+    screen_py "$n" ocr "$@"
+    ;;
+  shot)
+    n="${1:-}"; check_slot "$n"; require_running "$n"
+    note_reader "$n"
+    out="${2:-/tmp/desktop-$n.png}"
+    on_display "$n" magick import -silent -window root "$out"
+    echo "$out"
+    ;;
+  zoom)
+    n="${1:-}"; check_slot "$n"; require_running "$n"
+    [ $# -ge 5 ] || die "usage: agent-desktop zoom N X0 Y0 X1 Y1 [FILE]"
+    x0="$2" y0="$3" x1="$4" y1="$5"; check_int "$x0" "$y0" "$x1" "$y1"
+    out="${6:-/tmp/desktop-$n-zoom.png}"
+    w=$((x1 - x0)) h=$((y1 - y0))
+    [ "$w" -gt 0 ] && [ "$h" -gt 0 ] || die "need X1 > X0 and Y1 > Y0"
+    on_display "$n" magick import -silent -window root png:- |
+      magick png:- -crop "${w}x${h}+${x0}+${y0}" +repage -filter Lanczos -resize 200% "$out"
+    echo "$out  (2x; screen point = $x0 + px/2, $y0 + py/2)"
+    ;;
+  click)
+    n="${1:-}"; check_slot "$n"; shift; require_action "$n" serial
+    text="${1:-}"; [ -n "$text" ] || die "usage: agent-desktop click N TEXT [--nth K] [--role R] [--exact] [--ocr] [--page] [--kind K] [--ax] [--double|--right] [--wait]"
+    shift
+    locate_args=() page_args=() mode="" whole_page=0 wait=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --double|--right) mode="$1" ;;
+        --nth) [ $# -ge 2 ] || die "$1 needs a value"; check_int "$2"; locate_args+=("$1" "$2"); page_args+=("$1" "$2"); shift ;;
+        --role) [ $# -ge 2 ] || die "$1 needs a value"; locate_args+=("$1" "$2"); shift ;;
+        --exact) locate_args+=("$1"); page_args+=("$1") ;;
+        --ocr|--no-ocr) locate_args+=("$1") ;;
+        --kind) [ $# -ge 2 ] || die "$1 needs a value"; page_args+=("$1" "$2"); whole_page=1; shift ;;
+        --ax) page_args+=("$1"); whole_page=1 ;;
+        --page) whole_page=1 ;;
+        --wait) wait=1 ;;
+        *) die "unknown option: $1" ;;
+      esac
+      shift
+    done
+    if [ "$whole_page" = 1 ]; then
+      [ "$wait" = 1 ] && page_args+=(--wait)
+      page_py "$n" click "$text" --mode="$mode" "${page_args[@]}"
+      exit $?
+    fi
+    picked="$(screen_py "$n" locate "$text" --pick "${locate_args[@]}")" || exit $?
+    read -r x y found <<<"$picked"
+    if [ "$wait" = 1 ]; then
+      page_py "$n" clickxy "$x" "$y" --mode="$mode" | sed "s/^clicked $x,$y/clicked $x,$y via $found/"
+      exit "${PIPESTATUS[0]}"
+    fi
+    click_at "$n" "$x" "$y" "$mode"
+    echo "clicked $x,$y via $found"
+    ;;
+  clickxy)
+    n="${1:-}"; check_slot "$n"; shift; require_action "$n" serial
+    [ $# -ge 2 ] || die "usage: agent-desktop clickxy N X Y [--double|--right] [--wait]"
+    x="$1" y="$2"; check_int "$x" "$y"; shift 2
+    mode="" wait=0
+    for arg in "$@"; do
+      case "$arg" in
+        --double|--right) mode="$arg" ;;
+        --wait) wait=1 ;;
+        *) die "unknown click option: $arg" ;;
+      esac
+    done
+    if [ "$wait" = 1 ]; then
+      page_py "$n" clickxy "$x" "$y" --mode="$mode"
+    else
+      click_at "$n" "$x" "$y" "$mode"
+    fi
+    ;;
+  type)
+    n="${1:-}"; check_slot "$n"; require_action "$n" serial
+    [ $# -ge 2 ] || die "usage: agent-desktop type N TEXT"
+    on_display "$n" xdotool type --delay 25 -- "$2"
+    ;;
+  key)
+    n="${1:-}"; check_slot "$n"; shift; require_action "$n" serial
+    [ $# -ge 1 ] || die "usage: agent-desktop key N KEY..."
+    on_display "$n" xdotool key --delay 50 -- "$@"
+    ;;
+  scroll)
+    n="${1:-}"; check_slot "$n"; require_action "$n" serial
+    case "${2:-}" in up) button=4 ;; down) button=5 ;; *) die "usage: agent-desktop scroll N up|down [CLICKS] [X Y]" ;; esac
+    clicks="${3:-5}"; check_int "$clicks"
+    if [ $# -ge 5 ]; then check_int "$4" "$5"; on_display "$n" xdotool mousemove "$4" "$5"; fi
+    on_display "$n" xdotool click --repeat "$clicks" --delay 40 "$button"
+    ;;
+  -h|--help|help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0" ;;
+  *) die "unknown command: $cmd (try --help)" ;;
+esac

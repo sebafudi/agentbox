@@ -144,4 +144,11 @@ Existing live monitor/resume Zellij sessions are reused; exited layouts are not 
 
 Logs scroll with **↑↓/PgUp/PgDn**; **Home/End** moves to start/tail. In details, **PgUp/PgDn** scrolls the configuration while arrows select runs. Configuration/history and open logs refresh periodically; **Ctrl-R** requests an immediate refresh. **Esc** returns through log/details/jobs to the original home or finder, preserving the underlying session finder and its preferences.
 
+## systemd units
+
+[`systemd/`](systemd/) holds the user units used on the reference box (install into `~/.config/systemd/user/`, then `systemctl --user enable --now` the timers and the path unit):
+
+- `agentbox-login-refresh.{service,timer}`: runs `agentbox-login --refresh` every 15 seconds so the home screen and Zellij finder open from a warm cache.
+- `agentbox-facts.{service,timer,path}`: regenerates the facts snapshot every 15 minutes and whenever `~/.bashrc`, `~/.local/bin`, the Zellij config or the user units change.
+
 Tests: `go test -p 2 ./...`.

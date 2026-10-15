@@ -1,0 +1,10 @@
+[Unit]
+Description=Agentbox telemetry dashboard (read-only, port 6090)
+
+[Service]
+ExecStart=/usr/bin/python3 -I %h/.local/lib/agentbox-telemetry/dashboard.py --host 0.0.0.0 --port 6090
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

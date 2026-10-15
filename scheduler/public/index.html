@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Agent Scheduler</title>
+    <link rel="stylesheet" href="/style.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="container header-inner">
+        <div>
+          <p class="eyebrow">Operations dashboard</p>
+          <h1>Agent Scheduler</h1>
+          <p class="header-description">A clear view of scheduled agent work.</p>
+        </div>
+        <div class="header-actions">
+          <button id="refresh-button" class="button button-secondary" type="button">Refresh now</button>
+          <button id="logout-button" class="button button-secondary" type="button" hidden>Log out</button>
+        </div>
+      </div>
+    </header>
+
+    <main id="main" class="container main-content">
+      <section aria-labelledby="status-heading" class="panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Public overview</p>
+            <h2 id="status-heading">Job status</h2>
+          </div>
+          <span id="updated-at" class="muted" aria-live="off"></span>
+        </div>
+        <p id="status-error" class="notice notice-error" role="alert" hidden></p>
+        <ul id="status-list" class="status-list" aria-live="polite" aria-relevant="additions removals"> <li class="empty-state">Loading job status…</li></ul>
+      </section>
+
+      <section id="login-panel" class="panel login-panel" aria-labelledby="login-heading">
+        <p class="eyebrow">Private view</p>
+        <h2 id="login-heading">Sign in for details</h2>
+        <p class="muted">Schedules, prompts, and run logs are available to authorized users.</p>
+        <form id="login-form" class="login-form">
+          <label for="password">Dashboard password</label>
+          <div class="login-controls">
+            <input id="password" name="password" type="password" autocomplete="current-password" required>
+            <button id="login-button" class="button button-primary" type="submit">Sign in</button>
+          </div>
+          <p id="login-error" class="notice notice-error" role="alert" hidden></p>
+        </form>
+      </section>
+
+      <div id="private-content" hidden>
+        <nav class="private-nav" aria-label="Private sections">
+          <a href="#jobs-heading">Job configuration</a>
+          <a href="#runs-heading">Run history</a>
+        </nav>
+        <p id="details-error" class="notice notice-error" role="alert" hidden></p>
+        <section class="panel private-panel" aria-labelledby="jobs-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Read-only configuration</p>
+              <h2 id="jobs-heading">Scheduled jobs</h2>
+            </div>
+          </div>
+          <div id="jobs-list" class="card-grid" aria-live="polite">Loading configuration…</div>
+        </section>
+        <section class="panel private-panel" aria-labelledby="runs-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Recent activity</p>
+              <h2 id="runs-heading">Run history</h2>
+            </div>
+          </div>
+          <div class="history-controls" role="search" aria-label="Filter run history">
+            <div class="history-search">
+              <label for="history-search">Search history</label>
+              <input id="history-search" type="search" placeholder="Job, run ID, scope or PR…" autocomplete="off">
+            </div>
+            <div>
+              <label for="history-job">Job</label>
+              <select id="history-job"><option value="">All jobs</option></select>
+            </div>
+            <div>
+              <label for="history-result">Result</label>
+              <select id="history-result">
+                <option value="">All results</option>
+                <option value="attention">Needs attention</option>
+                <option value="running">Running</option>
+                <option value="processed">Work performed</option>
+                <option value="idle">Idle / skipped</option>
+                <option value="success">Succeeded</option>
+              </select>
+            </div>
+            <div>
+              <label for="history-period">Period</label>
+              <select id="history-period">
+                <option value="">All retained history</option>
+                <option value="1">Last 24 hours</option>
+                <option value="7">Last 7 days</option>
+                <option value="30">Last 30 days</option>
+              </select>
+            </div>
+            <button id="history-clear" class="button button-secondary" type="button">Clear filters</button>
+          </div>
+          <p id="history-count" class="muted history-count" role="status"></p>
+          <div id="runs-list" class="run-list" aria-live="polite">Loading run history…</div>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

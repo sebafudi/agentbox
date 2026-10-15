@@ -1,0 +1,14 @@
+[
+  {"port": 6070, "name": "Agentbox hub", "kind": "http", "unit": "agentbox-hub.service",
+   "about": "This page: everything agentbox exposes, with links and status."},
+  {"port": 6080, "name": "Agent desktops", "kind": "http", "unit": "agent-desktop-web.service",
+   "about": "noVNC viewer for the virtual desktops (slot 0 and agent slots)."},
+  {"port": 6081, "name": "Desktop switch API", "kind": "api", "unit": "agent-desktop-control.service",
+   "about": "Owner switches used by the noVNC switch bar. Through the tunnel it is served at /api/ on the desktops hostname."},
+  {"port": 6090, "name": "Telemetry dashboard", "kind": "http", "unit": "agentbox-telemetry-dashboard.service",
+   "about": "Token usage, sessions and actions of Claude, Codex and omp."},
+  {"port": 8457, "name": "Agent scheduler", "kind": "https", "unit": "agent-scheduler.service",
+   "about": "Scheduled jobs dashboard. Kept off the Cloudflare tunnel by policy (LAN and Tailscale only)."},
+  {"port": 22, "name": "SSH", "kind": "ssh", "system_unit": "sshd.service",
+   "about": "Login workspace. Through the tunnel: ProxyCommand cloudflared access ssh, or the browser terminal."}
+]
