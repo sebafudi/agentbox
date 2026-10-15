@@ -7,7 +7,7 @@ description: Operating an agentbox, a dedicated Linux VM that hosts coding agent
 
 An agentbox is a disposable, single-purpose VM whose only job is to run coding agents for its owner. The owner never sits at it: they connect over SSH from a laptop or phone, usually into Zellij, and read the agents' output from there. Nothing on it is production; the box can be rebuilt, but the projects in `~/code` are real work and live in git.
 
-This skill describes what an agentbox consists of and how to operate one. It is written so that you can point an agent at a hypervisor and a fresh VM and have it reproduce the same setup, but it is a description, not an install script: read it, adapt the values below to your box, and keep it current as the box changes.
+This skill describes one specific agentbox: its owner's personal setup, shaped by their hardware, network, tools and habits. It is not meant to be used as-is. Treat it as a worked example: before building or operating a box from it, adapt it to the new owner's needs and preferences (distro, multiplexer, agents, access paths, limits, keybindings) and rewrite the parts that do not fit. It describes the finished box, not install steps; the agent works out how to get there on the hardware at hand. [references/history.md](references/history.md) explains how the original was built.
 
 ## This box (edit these first)
 

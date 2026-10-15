@@ -2,7 +2,11 @@
 
 An agentbox is a dedicated Linux VM that hosts coding agents (Claude Code, Codex, omp) for one person who only ever reaches it remotely, from a laptop or a phone, through SSH and Zellij. It runs on a small home hypervisor, keeps agents busy while you are away, and is disposable: everything that matters lives in git.
 
-This repository describes what an agentbox consists of and holds the tooling for working with one. It is meant as a reference: point an agent at a hypervisor (Proxmox or similar) and a fresh VM, give it the skill below with your own values filled in, and it can rebuild the same setup. There is deliberately no step-by-step installer; the skill describes the finished box, and the agent works out how to get there on your hardware.
+This repository describes what an agentbox consists of and holds the tooling for working with one.
+
+> **This is my setup, not a product.** Every choice here (Arch, Zellij, omp next to Claude Code and Codex, the keybindings, the tunnel, the limits) reflects my own needs, hardware and habits. It is not meant to be installed as-is. Read it as a worked example, keep what fits you, and have your agent tune the rest to your own preferences before building anything.
+
+The intended use: give an agent this repository, a hypervisor and your own requirements, and let it build *your* box, using mine as the reference. There is deliberately no step-by-step installer; the skill describes the finished box, and the agent works out how to get there on your hardware.
 
 ![agentbox-login home screen](login/screenshots/home.png)
 
@@ -23,11 +27,23 @@ This repository describes what an agentbox consists of and holds the tooling for
 - **Browsers**: headless Chromium for tests, and per-agent X11 virtual desktops (Xvfb, openbox, x11vnc, noVNC) you can watch and take over from a browser.
 - **Self-knowledge**: machine notes, hard rules, the skill, and a live facts snapshot imported into every agent session, kept current by the agents themselves.
 
+## How mine was built
+
+The box was not set up by hand. From a different computer (my Mac), I gave a coding agent root access to the Proxmox host and described the box I wanted. The agent did the rest by itself:
+
+1. Created the VM on Proxmox (CPU, RAM, disk, UEFI) and booted it from the Arch ISO it downloaded and verified.
+2. Installed Arch over SSH from the live environment (`pacstrap`, systemd-boot, `linux-lts`, networking, sshd with keys only), then rebooted into the installed system.
+3. Provisioned the user, packages, shell, Zellij, Docker, Tailscale, the Cloudflare Tunnel and the coding agents.
+4. Wrote the machine notes, the hard rules and this skill, so later agents running *on* the box know where they are.
+
+After that, root access to the hypervisor was no longer needed: everything since has been built by agents running on the box itself, which keep the skill current as they go. If you do the same, take the hypervisor credentials back once the VM exists.
+
 ## Using it
 
-1. Clone into `~/code/agentbox` on the box.
-2. Link the skill where your agents find it, for example `~/.agents/skills/agentbox` (omp) and `~/.claude/skills/agentbox` (Claude Code). Then fill in your values.
-3. Build the workspace: see [`login/README.md`](login/README.md).
+1. Have your agent read the skill and the topology template, then adapt them to your own hardware, network, tools and preferences. Change anything you would do differently; it is a starting point, not a spec.
+2. Let it build the box (as above), or rebuild parts of an existing one.
+3. On the box, clone into `~/code/agentbox` and link your adapted skill where your agents find it, for example `~/.agents/skills/agentbox` (omp) and `~/.claude/skills/agentbox` (Claude Code).
+4. Build the workspace: see [`login/README.md`](login/README.md).
 
 Keep your own copy of the skill on the box as the source of truth and let agents update it as the box changes. Do not publish generated state (`machine-state.md`, `~/.local/state/`): it contains session names, paths, commands and network details.
 

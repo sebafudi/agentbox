@@ -2,7 +2,7 @@
 
 ## How the box came to be
 
-1. A VM on a home Proxmox host, freshly installed from the Arch ISO with `pacstrap` over SSH from the live environment (cloud-init injected the SSH key).
+1. Built by an agent, not by hand. From another computer, the owner gave a coding agent root access to the Proxmox host and described the box they wanted. The agent created the VM, booted it from the Arch ISO (checksum verified), installed Arch with `pacstrap` over SSH from the live environment (cloud-init injected the SSH key) and provisioned it. Once the VM existed, hypervisor access was no longer needed; everything after that was built by agents running on the box.
 2. Remote access first through Tailscale, then a Cloudflare Tunnel because the owner's work laptop cannot run Tailscale.
 3. Zellij chosen over tmux, configured locked by default with `Ctrl b` to unlock, session resurrection, and an agent-aware resume hook.
 4. An SSH key and a GPG signing key generated on the box for GitHub.
