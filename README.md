@@ -27,25 +27,17 @@ The intended use: give an agent this repository, a hypervisor and your own requi
 - **Browsers**: headless Chromium for tests, and per-agent X11 virtual desktops (Xvfb, openbox, x11vnc, noVNC) you can watch and take over from a browser.
 - **Self-knowledge**: machine notes, hard rules, the skill, and a live facts snapshot imported into every agent session, kept current by the agents themselves.
 
-## How mine was built
+## How to recreate it
 
-The box was not set up by hand. From a different computer (my Mac), I gave a coding agent root access to the Proxmox host and described the box I wanted. The agent did the rest by itself:
+This is also how mine was made: no part of it was set up by hand.
 
-1. Created the VM on Proxmox (CPU, RAM, disk, UEFI) and booted it from the Arch ISO it downloaded and verified.
-2. Installed Arch over SSH from the live environment (`pacstrap`, systemd-boot, `linux-lts`, networking, sshd with keys only), then rebooted into the installed system.
-3. Provisioned the user, packages, shell, Zellij, Docker, Tailscale, the Cloudflare Tunnel and the coding agents.
-4. Wrote the machine notes, the hard rules and this skill, so later agents running *on* the box know where they are.
+1. **Adapt it first.** On your own computer, have a coding agent read this repository, especially the skill and the topology template. Then rewrite them for your hardware, network, tools and preferences. Change anything you would do differently; it is a starting point, not a spec.
+2. **Give the agent the hypervisor.** Give the agent root access to your Proxmox host (or another hypervisor) and point it at your adapted skill. Mine created the VM and booted the Arch ISO, which it downloaded and verified. It installed Arch over SSH from the live environment (`pacstrap`, systemd-boot, `linux-lts`, networking, sshd with keys only) and rebooted into the installed system. Then it set up the user, packages, shell, Zellij, Docker, Tailscale, the tunnel and the coding agents.
+3. **Hand the box its own knowledge.** The agent writes the machine notes, the hard rules and the skill onto the box, so later agents running *on* it know where they are and what they may touch.
+4. **Take the hypervisor access back.** Once the VM exists, the agent no longer needs root on the hypervisor. From then on, agents running on the box build everything else and keep the skill current as they go.
+5. **Add the workspace.** On the box, clone this repository into `~/code/agentbox`. Link your adapted skill where your agents find it, for example `~/.agents/skills/agentbox` (omp) and `~/.claude/skills/agentbox` (Claude Code). Then build `agentbox-login` as described in [`login/README.md`](login/README.md).
 
-After that, root access to the hypervisor was no longer needed: everything since has been built by agents running on the box itself, which keep the skill current as they go. If you do the same, take the hypervisor credentials back once the VM exists.
-
-## Using it
-
-1. Have your agent read the skill and the topology template, then adapt them to your own hardware, network, tools and preferences. Change anything you would do differently; it is a starting point, not a spec.
-2. Let it build the box (as above), or rebuild parts of an existing one.
-3. On the box, clone into `~/code/agentbox` and link your adapted skill where your agents find it, for example `~/.agents/skills/agentbox` (omp) and `~/.claude/skills/agentbox` (Claude Code).
-4. Build the workspace: see [`login/README.md`](login/README.md).
-
-Keep your own copy of the skill on the box as the source of truth and let agents update it as the box changes. Do not publish generated state (`machine-state.md`, `~/.local/state/`): it contains session names, paths, commands and network details.
+Keep your own copy of the skill on the box as the source of truth. Do not publish generated state (`machine-state.md`, `~/.local/state/`): it contains session names, paths, commands and network details.
 
 ## Not here (yet)
 
