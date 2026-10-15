@@ -9,11 +9,23 @@ An agentbox is a disposable, single-purpose VM whose only job is to run coding a
 
 This skill describes one specific agentbox: its owner's personal setup, shaped by their hardware, network, tools and habits. It is not meant to be used as-is. Treat it as a worked example: before building or operating a box from it, adapt it to the new owner's needs and preferences (distro, multiplexer, agents, access paths, limits, keybindings) and rewrite the parts that do not fit. It describes the finished box, not install steps; the agent works out how to get there on the hardware at hand. [references/history.md](references/history.md) explains how the original was built.
 
-## This box (edit these first)
+## Recreating this box: interview the owner first
 
-Every host-specific value in this skill comes from this table. Replace the examples with your own and keep them in one place.
+If you are an agent asked to build a box from this skill, do not copy it. Before touching any hardware, ask the owner the questions below (a few at a time, offering this box's choice as the default) and get answers to them. Then rewrite this skill and [references/topology.md](references/topology.md) with their answers, removing everything that does not apply, so the new box gets a skill that describes *it*. If you are operating the original box, skip this section.
 
-| Value | Example | Notes |
+1. **Hypervisor**: Which host and hypervisor (Proxmox or something else)? How will you reach it, and when should that access be handed back? What else runs on the host that must never be disturbed, and how much CPU, RAM and disk can this VM take?
+2. **Base system**: Which distro and kernel (this box: Arch + `linux-lts`)? Which username and hostname? Passwordless sudo or not? How is the VM backed up?
+3. **Access**: Which devices will you connect from (laptop, phone), and on which networks? Is any of them managed or filtered? LAN only, Tailscale, a Cloudflare Tunnel with your own domain, or something else? Is the home connection behind CGNAT?
+4. **Workspace**: Zellij or tmux, and which keybindings? Do you want the `agentbox-login` home screen on every SSH login? Which shell and prompt tools?
+5. **Agents**: Which coding agents (Claude Code, Codex, omp, others), and which accounts or subscriptions? What should they be allowed to do without asking (push, open PRs, touch shared repos, install packages)? Which models should they use by default, and how frugal should they be with tokens?
+6. **Git**: Which identity and signing setup? Which hosts and organisations do you work with, and what is off limits?
+7. **Runtimes and services**: Per-project runtimes via mise, or something else? Docker for databases?
+8. **Optional parts**: Which of these do you want: virtual desktops you can watch from a browser, headless background agents, a cron scheduler for agents, a hub of exposed services, token telemetry, a live facts snapshot?
+9. **Hard rules**: Which actions could lock you out or cost you money, and must never happen without asking?
+
+The values below are the original box's, with private details replaced by examples. They show the shape of an answer, not a recommendation.
+
+| Value | Original box | Notes |
 |---|---|---|
 | Hostname | `agentbox` | mDNS name `agentbox.local` on the LAN |
 | User | `owner` (uid 1000) | single user, passwordless sudo, member of `docker` |
@@ -25,7 +37,7 @@ Every host-specific value in this skill comes from this table. Replace the examp
 
 ## References
 
-- [references/topology.md](references/topology.md): the hypervisor host, neighbouring VMs, the home network, every way in, and the owner's devices (template).
+- [references/topology.md](references/topology.md): the hypervisor host, neighbouring VMs, the home network, every way in, and the owner's devices.
 - [references/history.md](references/history.md): design decisions and why, plus known quirks.
 - [references/automations.md](references/automations.md): timers and services that run without anyone logged in, and lessons for building new automations.
 - [references/clipboard-image-paste.md](references/clipboard-image-paste.md): parked research on pasting clipboard images from a Mac into agents running over SSH.

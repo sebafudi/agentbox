@@ -14,7 +14,7 @@ The intended use: give an agent this repository, a hypervisor and your own requi
 
 | Path | What it is |
 |---|---|
-| [`skills/agentbox/`](skills/agentbox/SKILL.md) | The agentbox skill (Agent Skills format): layout, SSH workspace, packages, runtimes, Docker, browsers and virtual desktops, background and scheduled agents, networking, telemetry, resource limits, recovery. Edit the "This box" table and the topology template for your own machine. |
+| [`skills/agentbox/`](skills/agentbox/SKILL.md) | The agentbox skill (Agent Skills format): layout, SSH workspace, packages, runtimes, Docker, browsers and virtual desktops, background and scheduled agents, networking, telemetry, resource limits, recovery. When an agent recreates a box from it, the skill tells it what to ask you first. |
 | [`login/`](login/README.md) | `agentbox-login`, the Go/Bubble Tea SSH home screen: launch or resume agents and shells in Zellij, search sessions, watch per-session CPU/RSS, manage scheduled jobs. Also `agentbox-facts`, the live machine snapshot that agents read. |
 
 ## What a box looks like
@@ -31,7 +31,7 @@ The intended use: give an agent this repository, a hypervisor and your own requi
 
 This is also how mine was made: no part of it was set up by hand.
 
-1. **Adapt it first.** On your own computer, have a coding agent read this repository, especially the skill and the topology template. Then rewrite them for your hardware, network, tools and preferences. Change anything you would do differently; it is a starting point, not a spec.
+1. **Adapt it first.** On your own computer, point a coding agent at this repository and ask it to build you a box like this. The skill tells it to interview you first (hardware, network, devices, agents, preferences, rules) and to rewrite the skill with your answers. Change anything you would do differently; it is a starting point, not a spec.
 2. **Give the agent the hypervisor.** Give the agent root access to your Proxmox host (or another hypervisor) and point it at your adapted skill. Mine created the VM and booted the Arch ISO, which it downloaded and verified. It installed Arch over SSH from the live environment (`pacstrap`, systemd-boot, `linux-lts`, networking, sshd with keys only) and rebooted into the installed system. Then it set up the user, packages, shell, Zellij, Docker, Tailscale, the tunnel and the coding agents.
 3. **Hand the box its own knowledge.** The agent writes the machine notes, the hard rules and the skill onto the box, so later agents running *on* it know where they are and what they may touch.
 4. **Take the hypervisor access back.** Once the VM exists, the agent no longer needs root on the hypervisor. From then on, agents running on the box build everything else and keep the skill current as they go.

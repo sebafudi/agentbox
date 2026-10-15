@@ -1,6 +1,6 @@
-# agentbox topology (template)
+# agentbox topology
 
-Fill this in for your own box. The values below are examples. Treat addresses as facts to verify (`ip`, `tailscale status`, `agentbox-facts`) before relying on them.
+The original box's surroundings, with private details replaced by examples. When recreating a box, get the owner's answers first (see "Recreating this box" in SKILL.md) and rewrite this file with them. Treat addresses as facts to verify (`ip`, `tailscale status`, `agentbox-facts`) before relying on them.
 
 ## Hypervisor host
 
