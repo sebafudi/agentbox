@@ -220,7 +220,9 @@ func projects() []string {
 			continue
 		}
 		names = append(names, d.Name())
-		if d.Name() == "agentbox" || d.Name() == "hubsync" {
+		// Group directories (no .git of their own) list their checkouts too; so does the agentbox repo.
+		_, gitErr := os.Stat(filepath.Join(root, d.Name(), ".git"))
+		if !strings.HasPrefix(d.Name(), ".") && (d.Name() == "agentbox" || gitErr != nil) {
 			children, _ := os.ReadDir(filepath.Join(root, d.Name()))
 			for _, child := range children {
 				if child.IsDir() && !strings.HasPrefix(child.Name(), ".") {
@@ -233,7 +235,15 @@ func projects() []string {
 	for _, name := range names {
 		path := filepath.Join(root, name)
 		ctx := context.Background()
-		if run(ctx, "git", "-C", path, "rev-parse", "--git-dir") == "" {
+		top := run(ctx, "git", "-C", path, "rev-parse", "--show-toplevel")
+		if top != "" && top != path {
+			// A directory inside another checkout: tracked parts belong to the parent, ignored ones stand alone.
+			if run(ctx, "git", "-C", top, "check-ignore", path) == "" {
+				continue
+			}
+			top = ""
+		}
+		if top == "" {
 			a = append(a, "- "+name+": not a git repo")
 			continue
 		}

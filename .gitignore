@@ -1,2 +1,7 @@
-/agentbox-login
-/agentbox-facts
+# built binaries
+/login/agentbox-login
+/login/agentbox-facts
+
+# private components that live beside this checkout but are not published
+/agent-scheduler/
+/ghostty-image-clipboard/
