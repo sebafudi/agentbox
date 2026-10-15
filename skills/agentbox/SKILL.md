@@ -11,7 +11,7 @@ This skill describes one specific agentbox: its owner's personal setup, shaped b
 
 ## Recreating this box: interview the owner first
 
-If you are an agent asked to build a box from this skill, do not copy it. Before touching any hardware, ask the owner the questions below (a few at a time, offering this box's choice as the default) and get answers to them. Then rewrite this skill and [references/topology.md](references/topology.md) with their answers, removing everything that does not apply, so the new box gets a skill that describes *it*. If you are operating the original box, skip this section.
+If you are an agent asked to build a box from this skill, do not copy it. Before touching any hardware, ask the owner the questions below (a few at a time, offering this box's choice as the default) and get answers to them. Then rewrite this skill and [references/topology.md](references/topology.md) with their answers, removing everything that does not apply, so the new box gets a skill that describes *it*. Once the VM is up, copy the rewritten skill, machine notes and rules onto the box itself; from that moment the box's copy is the source of truth and the one you worked on is only a draft (see "Keeping this skill current"). If you are operating the original box, skip this section.
 
 1. **Hypervisor**: Which host and hypervisor (Proxmox or something else)? How will you reach it, and when should that access be handed back? What else runs on the host that must never be disturbed, and how much CPU, RAM and disk can this VM take?
 2. **Base system**: Which distro and kernel (this box: Arch + `linux-lts`)? Which username and hostname? Passwordless sudo or not? How is the VM backed up?
