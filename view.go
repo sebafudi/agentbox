@@ -168,7 +168,7 @@ func (m model) actionGrid(width int) string {
 }
 
 func (m model) filterBar(width int) string {
-	if width < 30 {
+	if width < 34 {
 		chip := func(key string, enabled bool) string {
 			mark := "○"
 			tone := muted
@@ -178,7 +178,7 @@ func (m model) filterBar(width int) string {
 			}
 			return lipgloss.NewStyle().Foreground(tone).Render("^" + key + mark)
 		}
-		return mouseZones.Mark("filter-0", chip("G", m.prefs.Agents)) + "  " + mouseZones.Mark("filter-1", chip("B", m.prefs.Shells)) + "  " + mouseZones.Mark("filter-2", chip("V", m.prefs.Resurrect))
+		return mouseZones.Mark("filter-0", chip("G", m.prefs.Agents)) + " " + mouseZones.Mark("filter-1", chip("B", m.prefs.Shells)) + " " + mouseZones.Mark("filter-2", chip("V", m.prefs.Resurrect)) + " " + mouseZones.Mark("filter-3", chip("Y", m.prefs.T3))
 	}
 	filter := func(on bool, title, hotkey string) string {
 		check := "○"
@@ -195,7 +195,7 @@ func (m model) filterBar(width int) string {
 	if width < 60 {
 		names = []string{"A", "S", "R"}
 	}
-	bar := mouseZones.Mark("filter-0", filter(m.prefs.Agents, names[0], "^G")) + " " + mouseZones.Mark("filter-1", filter(m.prefs.Shells, names[1], "^B")) + " " + mouseZones.Mark("filter-2", filter(m.prefs.Resurrect, names[2], "^V"))
+	bar := mouseZones.Mark("filter-0", filter(m.prefs.Agents, names[0], "^G")) + " " + mouseZones.Mark("filter-1", filter(m.prefs.Shells, names[1], "^B")) + " " + mouseZones.Mark("filter-2", filter(m.prefs.Resurrect, names[2], "^V")) + " " + mouseZones.Mark("filter-3", filter(m.prefs.T3, "T3", "^Y"))
 	return bar
 }
 
@@ -305,6 +305,9 @@ func sessionTitle(s Session) string {
 		}
 	}
 	if s.Title != "" {
+		if s.T3 != nil && s.T3.Project != "" {
+			return clean(s.Title) + " · " + clean(s.T3.Project)
+		}
 		return clean(s.Title)
 	}
 	return s.Name
@@ -437,6 +440,9 @@ func (m model) sessionDetail(width int, rows []Session, totals resourceTotals) s
 	}
 	if m.h >= 28 {
 		command := " "
+		if selected && s.T3 != nil && (m.mode != "search" || m.searchFocus == searchResults) {
+			command = "  T3 · " + s.T3.Project + " · " + clean(s.T3.Cwd) + " · Enter inspect"
+		}
 		if selected && (m.mode != "search" || m.searchFocus == searchResults) && s.Kind == "shell" && !s.Saved {
 			switch {
 			case s.RunningCommand != "":
@@ -477,6 +483,9 @@ func (m model) sessionDetail(width int, rows []Session, totals resourceTotals) s
 
 func (m model) sessionRow(s Session, index, width int, active bool) string {
 	kind := strings.ToUpper(s.Kind)
+	if s.T3 != nil {
+		kind = "T3 " + kind
+	}
 	if s.Saved {
 		kind = "SAVED " + kind
 	}
@@ -683,8 +692,11 @@ func (m model) home(width, limit int) string {
 }
 
 func (m model) searchControls(width int) string {
-	names := [5]string{"Agents", "Shells", "Saved", "Density", "History"}
-	states := [5]string{"○ OFF", "○ OFF", "○ OFF", "Tight", m.prefs.historyLabel()}
+	names := [6]string{"Agents", "Shells", "Saved", "Density", "History", "T3"}
+	states := [6]string{"○ OFF", "○ OFF", "○ OFF", "Tight", m.prefs.historyLabel(), "○ OFF"}
+	if m.prefs.T3 {
+		states[5] = "● ON"
+	}
 	for i, on := range []bool{m.prefs.Agents, m.prefs.Shells, m.prefs.Resurrect} {
 		if on {
 			states[i] = "● ON"
@@ -699,12 +711,13 @@ func (m model) searchControls(width int) string {
 	if width >= 30 && width < 36 && m.prefs.Layout == densitySpacey {
 		states[3] = "Spacey"
 	}
-	groups := [][]int{{0, 1, 2, 3, 4}}
+	groups := [][]int{{0, 1, 2, 3, 4, 5}}
 	if width < 90 {
-		groups = [][]int{{0, 1, 2}, {3, 4}}
+		groups = [][]int{{0, 1, 2}, {3, 4, 5}}
 	}
 	if width < 30 {
-		names = [5]string{"A", "S", "R", "D", "H"}
+		names = [6]string{"A", "S", "R", "D", "H", "T3"}
+		states[5] = strings.Split(states[5], " ")[0]
 		states[0], states[1], states[2] = strings.TrimSuffix(states[0], " ON"), strings.TrimSuffix(states[1], " ON"), strings.TrimSuffix(states[2], " ON")
 		states[0], states[1], states[2] = strings.TrimSuffix(states[0], " OFF"), strings.TrimSuffix(states[1], " OFF"), strings.TrimSuffix(states[2], " OFF")
 		states[3] = map[density]string{densityCompact: "Cmp", densityTight: "Tgt", densitySpacey: "Spc"}[m.prefs.Layout]
@@ -715,8 +728,16 @@ func (m model) searchControls(width int) string {
 		var cells []string
 		for j, index := range group {
 			n := cellWidth
+			if width >= 30 && width < 45 && group[0] == 3 {
+				// Keep History's value readable; the T3 toggle needs less room.
+				n++
+			}
 			if j == len(group)-1 {
-				n = width - (cellWidth+1)*(len(group)-1)
+				preceding := cellWidth
+				if width >= 30 && width < 45 && group[0] == 3 {
+					preceding++
+				}
+				n = width - (preceding+1)*(len(group)-1)
 			}
 			active := m.searchFocus == searchFocus(index+1)
 			bg, fg, marker := surface, pale, " "
@@ -836,8 +857,8 @@ func (m model) search(width, limit int) string {
 }
 
 func (m model) settingsCard(index, width int) string {
-	names := []string{"Agents", "Shells", "Saved sessions", "Density", "History span"}
-	values := []bool{m.prefs.Agents, m.prefs.Shells, m.prefs.Resurrect}
+	names := []string{"Agents", "Shells", "Saved sessions", "Density", "History span", "T3 sessions"}
+	values := []bool{m.prefs.Agents, m.prefs.Shells, m.prefs.Resurrect, false, false, m.prefs.T3}
 	checked := ""
 	if index == 4 {
 		checked = m.prefs.historyLabel()
@@ -865,12 +886,12 @@ func (m model) settingsCard(index, width int) string {
 		fg = mint
 	}
 	if m.compactView() {
-		names = []string{"Agents", "Shells", "Saved", "Density", "History"}
+		names = []string{"Agents", "Shells", "Saved", "Density", "History", "T3 ^Y"}
 		if index == 4 {
 			checked = m.prefs.historyLabel()
 		}
 		if width < 16 {
-			names = []string{"A", "S", "R", "D", "H"}
+			names = []string{"A", "S", "R", "D", "H", "T3"}
 			if index == 3 && width < 12 {
 				checked = map[density]string{densityCompact: "Cmp", densityTight: "Tgt", densitySpacey: "Spc"}[m.prefs.Layout]
 			}
@@ -890,7 +911,7 @@ func (m model) settings(width int) string {
 	rows := []string{
 		lipgloss.JoinHorizontal(lipgloss.Top, mouseZones.Mark("setting-0", m.settingsCard(0, col)), " ", mouseZones.Mark("setting-1", m.settingsCard(1, width-col-1))),
 		lipgloss.JoinHorizontal(lipgloss.Top, mouseZones.Mark("setting-2", m.settingsCard(2, col)), " ", mouseZones.Mark("setting-3", m.settingsCard(3, width-col-1))),
-		mouseZones.Mark("setting-4", m.settingsCard(4, width)),
+		lipgloss.JoinHorizontal(lipgloss.Top, mouseZones.Mark("setting-4", m.settingsCard(4, col)), " ", mouseZones.Mark("setting-5", m.settingsCard(5, width-col-1))),
 	}
 	parts := []string{m.header(width), m.section("PREFERENCES", "saved across sessions", width), strings.Join(rows, "\n"), m.footer(width)}
 	return strings.Join(parts, "\n")
@@ -915,6 +936,8 @@ func (m model) View() tea.View {
 	margin := min(2, max(0, m.h-28))
 	var content string
 	switch m.mode {
+	case "t3":
+		content = m.t3View(width)
 	case "scheduled":
 		content = m.scheduledView(width)
 	case "settings":

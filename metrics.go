@@ -199,6 +199,10 @@ func displayProcessCommand(cmdline []byte) string {
 }
 
 func scanSessionProcesses(root string, names map[string]bool) (map[string]*liveProcesses, error) {
+	return scanWorkspaceProcesses(root, names, nil)
+}
+
+func scanWorkspaceProcesses(root string, names map[string]bool, conversations map[string]t3ProcessSession) (map[string]*liveProcesses, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil, err
@@ -254,6 +258,31 @@ func scanSessionProcesses(root string, names map[string]bool) (map[string]*liveP
 		}
 		all[pid] = &candidate{usage: usage, name: name, pane: pane, path: path}
 	}
+	providerRoots := make(map[int]string)
+	if len(conversations) > 0 {
+		for pid, p := range all {
+			if name := t3ProcessSessionName(p.path, conversations); name != "" {
+				providerRoots[pid] = name
+				if key := found[name].server; key.PID == 0 || pid < key.PID {
+					found[name].server = p.usage.Key
+				}
+			}
+		}
+	}
+	// Explicit provider ownership takes priority over inherited pane markers:
+	// a T3 server can itself have been started from inside a Zellij terminal.
+	var providerOwner func(int, map[int]bool) string
+	providerOwner = func(pid int, seen map[int]bool) string {
+		p := all[pid]
+		if p == nil || seen[pid] {
+			return ""
+		}
+		seen[pid] = true
+		if name := providerRoots[pid]; name != "" {
+			return name
+		}
+		return providerOwner(p.usage.Parent, seen)
+	}
 	// Children may clear their pane environment or make it unreadable (btop
 	// does this). Their same-user parent chain still identifies the pane;
 	// ancestry of the Zellij server alone never does.
@@ -270,7 +299,11 @@ func scanSessionProcesses(root string, names map[string]bool) (map[string]*liveP
 		return owner(p.usage.Parent, seen)
 	}
 	for pid, p := range all {
-		name, pane := owner(pid, make(map[int]bool))
+		name := providerOwner(pid, make(map[int]bool))
+		pane := "t3"
+		if name == "" {
+			name, pane = owner(pid, make(map[int]bool))
+		}
 		if pane == "" {
 			continue
 		}
@@ -394,12 +427,21 @@ func populateSessionMetrics(procRoot, dir string, sessions []Session, clock func
 	defer unix.Flock(int(lock.Fd()), unix.LOCK_UN)
 
 	names := make(map[string]bool)
+	conversations := make(map[string]t3ProcessSession)
 	for _, s := range sessions {
 		if !s.Saved {
 			names[s.Name] = true
+			if s.T3 != nil && t3UUID.MatchString(s.T3.Conversation) {
+				id := strings.ToLower(s.T3.Conversation)
+				owner := t3ProcessSession{Name: s.Name, Provider: s.T3.Provider}
+				if _, duplicate := conversations[id]; duplicate {
+					owner.Name = "" // Do not count a shared conversation twice.
+				}
+				conversations[id] = owner
+			}
 		}
 	}
-	found, err := scanSessionProcesses(procRoot, names)
+	found, err := scanWorkspaceProcesses(procRoot, names, conversations)
 	if err != nil {
 		return
 	}

@@ -29,6 +29,9 @@ func (m model) aggregateResources(rows []Session) resourceTotals {
 	var totals resourceTotals
 	fresh := !m.snapshot.At.IsZero() && time.Since(m.snapshot.At) <= 30*time.Second
 	for _, s := range rows {
+		if s.T3 != nil && !s.Metrics.Available {
+			continue // Unmapped/shared backends have no attributable process usage.
+		}
 		if s.Saved {
 			totals.Saved++
 			continue

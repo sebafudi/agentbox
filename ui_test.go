@@ -543,7 +543,7 @@ func TestPreferenceHighlightStaysWithinSelectedCard(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	m := initialModel(false, "")
 	m.mode, m.w, m.h, m.prefs.Layout = "settings", 100, 36, densitySpacey
-	for selected := range 5 {
+	for selected := range 6 {
 		m.cursor = selected
 		screen := m.View().Content
 		colors := visibleBackgrounds(screen)
@@ -553,8 +553,8 @@ func TestPreferenceHighlightStaysWithinSelectedCard(t *testing.T) {
 				topRows = append(topRows, y)
 			}
 		}
-		if len(topRows) != 2 {
-			t.Fatalf("expected two preference rows, found %v", topRows)
+		if len(topRows) != 3 {
+			t.Fatalf("expected three preference rows, found %v", topRows)
 		}
 		for row, top := range topRows {
 			plain := strings.Split(ansi.Strip(screen), "\n")[top]

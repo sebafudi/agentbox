@@ -25,9 +25,9 @@ const (
 )
 
 type preferences struct {
-	Agents, Shells, Resurrect bool
-	Layout                    density
-	HistoryMinutes            int
+	Agents, Shells, Resurrect, T3 bool
+	Layout                        density
+	HistoryMinutes                int
 }
 
 func (p *preferences) cycleLayout() {
@@ -90,7 +90,7 @@ func (p *preferences) cycleHistory() {
 
 func prefsPath() string { return filepath.Join(stateRoot(), "preferences") }
 func readPrefs() preferences {
-	p := preferences{Agents: true, Layout: densityTight, HistoryMinutes: 30}
+	p := preferences{Agents: true, T3: true, Layout: densityTight, HistoryMinutes: 30}
 	data, _ := os.ReadFile(prefsPath())
 	layoutSeen := false
 	for _, line := range strings.Split(string(data), "\n") {
@@ -106,6 +106,8 @@ func readPrefs() preferences {
 			p.Shells = b
 		case "resurrect":
 			p.Resurrect = b
+		case "t3":
+			p.T3 = b
 		case "compact":
 			if !layoutSeen {
 				if b {
@@ -144,7 +146,7 @@ func savePrefs(p preferences) error {
 	for _, x := range []struct {
 		k string
 		v bool
-	}{{"agents", p.Agents}, {"shells", p.Shells}, {"resurrect", p.Resurrect}} {
+	}{{"agents", p.Agents}, {"shells", p.Shells}, {"resurrect", p.Resurrect}, {"t3", p.T3}} {
 		n := 0
 		if x.v {
 			n = 1
@@ -166,6 +168,9 @@ func savePrefs(p preferences) error {
 func (p preferences) includes(s Session) bool {
 	if s.Saved && !p.Resurrect {
 		return false
+	}
+	if s.T3 != nil {
+		return p.T3
 	}
 	if s.Kind == "shell" {
 		return p.Shells
@@ -189,6 +194,7 @@ const (
 	searchSaved
 	searchDensity
 	searchHistory
+	searchT3
 	searchResults
 )
 
@@ -207,6 +213,7 @@ type model struct {
 	notice         string
 	refreshing     bool
 	scheduled      schedulerUI
+	t3             t3UI
 }
 
 func initialModel(finder bool, notice string) model {
@@ -300,7 +307,7 @@ func (m *model) keepName(name string) {
 	}
 }
 func (m *model) clamp() {
-	if m.mode == "scheduled" {
+	if m.mode == "scheduled" || m.mode == "t3" {
 		return
 	}
 	count := len(m.listed())
@@ -308,7 +315,7 @@ func (m *model) clamp() {
 		count += len(quickActions)
 	}
 	if m.mode == "settings" {
-		count = 5
+		count = 6
 	}
 	if count == 0 {
 		m.cursor = 0
@@ -326,6 +333,24 @@ func (m *model) clamp() {
 	}
 }
 func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	if msg, ok := message.(t3DetailMsg); ok {
+		return m.updateT3Detail(msg)
+	}
+	if m.mode == "t3" {
+		switch msg := message.(type) {
+		case tea.KeyPressMsg:
+			return m.updateT3Key(msg.String())
+		case tea.MouseWheelMsg:
+			if msg.Button == tea.MouseWheelUp {
+				m.t3.offset = max(0, m.t3.offset-3)
+			} else if msg.Button == tea.MouseWheelDown {
+				m.t3.offset = min(m.t3MaxOffset(), m.t3.offset+3)
+			}
+			return m, nil
+		case tea.MouseClickMsg:
+			return m, nil
+		}
+	}
 	switch message.(type) {
 	case schedulerSnapshotMsg, schedulerMutationMsg, schedulerLogMsg, schedulerModelCatalogMsg:
 		return m.updateScheduled(message)
@@ -360,6 +385,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Tick(time.Second, func(t time.Time) tea.Msg { return ageMsg(t) })
 	case tickMsg:
 		cmd := tea.Tick(10*time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
+		if m.mode == "t3" && !m.t3.loading {
+			cmd = tea.Batch(cmd, m.loadT3Detail(false))
+		}
 		if m.mode == "scheduled" {
 			cmd = tea.Batch(cmd, m.scheduled.refresh())
 			if m.scheduled.page == "log" {
@@ -373,8 +401,12 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case snapshotMsg:
 		mode := m.mode
-		if mode == "scheduled" {
-			m.mode = m.scheduled.returnMode
+		if mode == "scheduled" || mode == "t3" {
+			if mode == "t3" {
+				m.mode = m.t3.returnMode
+			} else {
+				m.mode = m.scheduled.returnMode
+			}
 			if m.mode != "search" {
 				m.mode = "home"
 			}
@@ -382,7 +414,20 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		name := m.focusName()
 		m.refreshing = false
 		if msg.Err == "" {
+			if msg.Warning != "" {
+				m.notice = msg.Warning
+			} else if m.snapshot.Warning != "" {
+				m.notice = ""
+			}
 			m.snapshot = Snapshot(msg)
+			if mode == "t3" {
+				for _, s := range m.snapshot.Sessions {
+					if s.Name == m.t3.session.Name {
+						m.t3.session.Metrics = s.Metrics
+						break
+					}
+				}
+			}
 			m.keepName(name)
 		} else {
 			m.notice = msg.Err
@@ -435,7 +480,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateSearch(msg)
 		}
 		switch key {
-		case "ctrl+g", "ctrl+b", "ctrl+v":
+		case "ctrl+g", "ctrl+b", "ctrl+v", "ctrl+y":
 			m.toggleFilter(key)
 		case "esc":
 			m.action = Action{Verb: "logout"}
@@ -465,8 +510,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			rows := m.listed()
 			if i-1 < len(rows) {
-				m.action = Action{Verb: "attach", Name: rows[i-1].Name}
-				return m, tea.Quit
+				return m.openSession(rows[i-1])
 			}
 		}
 	}
@@ -485,7 +529,7 @@ func (m model) mouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 		return m.openScheduledJobs()
 	}
 	if m.mode == "settings" {
-		for i := 0; i < 5; i++ {
+		for i := 0; i < 6; i++ {
 			if mouseZones.Get(fmt.Sprintf("setting-%d", i)).InBounds(msg) {
 				m.cursor = i
 				return m.updateSettings("enter")
@@ -494,7 +538,7 @@ func (m model) mouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.mode == "search" {
-		for i := searchAgents; i <= searchHistory; i++ {
+		for i := searchAgents; i <= searchT3; i++ {
 			if mouseZones.Get(fmt.Sprintf("search-control-%d", i)).InBounds(msg) {
 				m.searchFocus = i
 				m.input.Blur()
@@ -516,7 +560,7 @@ func (m model) mouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
-	keys := []string{"ctrl+g", "ctrl+b", "ctrl+v"}
+	keys := []string{"ctrl+g", "ctrl+b", "ctrl+v", "ctrl+y"}
 	for i, key := range keys {
 		if mouseZones.Get(fmt.Sprintf("filter-%d", i)).InBounds(msg) {
 			m.toggleFilter(key)
@@ -594,12 +638,14 @@ func (m *model) activateSearchControl() {
 		}
 	case searchHistory:
 		m.cycleHistory()
+	case searchT3:
+		m.toggleFilter("ctrl+y")
 	}
 }
 
 func (m model) updateSearch(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
-	controls := m.searchFocus >= searchAgents && m.searchFocus <= searchHistory
+	controls := m.searchFocus >= searchAgents && m.searchFocus <= searchT3
 	switch key {
 	case "esc":
 		if m.finder {
@@ -636,7 +682,7 @@ func (m model) updateSearch(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch {
 		case controls:
 			if m.contentWidth() < 90 && m.searchFocus <= searchSaved {
-				m.searchFocus = min(m.searchFocus+3, searchHistory)
+				m.searchFocus = min(m.searchFocus+3, searchT3)
 			} else {
 				m.searchFocus = searchQuery
 				m.input.Focus()
@@ -657,7 +703,7 @@ func (m model) updateSearch(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if key == "left" && m.searchFocus > searchAgents {
 				m.searchFocus--
 			}
-			if key == "right" && m.searchFocus < searchHistory {
+			if key == "right" && m.searchFocus < searchT3 {
 				m.searchFocus++
 			}
 			return m, nil
@@ -670,7 +716,7 @@ func (m model) updateSearch(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if key == "enter" {
 			return m.activate()
 		}
-	case "ctrl+g", "ctrl+b", "ctrl+v":
+	case "ctrl+g", "ctrl+b", "ctrl+v", "ctrl+y":
 		m.toggleFilter(key)
 		return m, nil
 	}
@@ -697,6 +743,8 @@ func (m *model) toggleFilter(key string) {
 		m.prefs.Shells = !m.prefs.Shells
 	case "ctrl+v":
 		m.prefs.Resurrect = !m.prefs.Resurrect
+	case "ctrl+y":
+		m.prefs.T3 = !m.prefs.T3
 	}
 	if err := savePrefs(m.prefs); err != nil {
 		m.notice = err.Error()
@@ -723,17 +771,15 @@ func (m model) updateSettings(key string) (tea.Model, tea.Cmd) {
 			m.cursor -= 2
 		}
 	case "down", "j":
-		if m.cursor < 3 {
+		if m.cursor < 4 {
 			m.cursor += 2
-		} else if m.cursor == 3 {
-			m.cursor = 4
 		}
 	case "left":
 		if m.cursor%2 == 1 {
 			m.cursor--
 		}
 	case "right":
-		if m.cursor%2 == 0 && m.cursor < 4 {
+		if m.cursor%2 == 0 && m.cursor < 5 {
 			m.cursor++
 		}
 	case "space", "enter":
@@ -742,6 +788,9 @@ func (m model) updateSettings(key string) (tea.Model, tea.Cmd) {
 			m.prefs.cycleLayout()
 		case 4:
 			m.prefs.cycleHistory()
+		case 5:
+			m.toggleFilter("ctrl+y")
+			return m, nil
 		default:
 			keys := []string{"ctrl+g", "ctrl+b", "ctrl+v"}
 			m.toggleFilter(keys[m.cursor])
@@ -764,13 +813,7 @@ func (m model) activate() (tea.Model, tea.Cmd) {
 	}
 	rows := m.listed()
 	if idx >= 0 && idx < len(rows) {
-		s := rows[idx]
-		verb := "attach"
-		if m.finder {
-			verb = "switch"
-		}
-		m.action = Action{Verb: verb, Name: s.Name, PaneID: s.PaneID, Saved: s.Saved}
-		return m, tea.Quit
+		return m.openSession(rows[idx])
 	}
 	return m, nil
 }

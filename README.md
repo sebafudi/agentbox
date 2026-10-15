@@ -29,17 +29,18 @@ A terminal home screen for SSH + Zellij: start coding agents, jump between sessi
 Requires Linux (`/proc` for metrics), Go 1.26, and [Zellij](https://zellij.dev/). [omp](https://github.com/can1357/oh-my-pi) and Claude Code are optional; their launch actions need the corresponding commands on `PATH`. The launcher starts new sessions in `~/code`.
 
 ```sh
-git clone https://github.com/sebafudi/agentbox-login.git
-cd agentbox-login
+mkdir -p ~/code/agentbox
+git clone https://github.com/sebafudi/agentbox-login.git ~/code/agentbox/agentbox-login
+cd ~/code/agentbox/agentbox-login
 mise install                  # or provide Go 1.26 yourself
 mkdir -p ~/.local/bin ~/code
 go build -p 2 -o ~/.local/bin/agentbox-login .
 ~/.local/bin/agentbox-login
 ```
 
-`/` searches; `p` opens preferences; `o/r` and `c/l` start/resume omp and Claude; `s` creates a Zellij shell; `h` exits to Bash. **a** or **Ctrl-J** opens scheduled jobs. Arrows + Enter or mouse clicks open sessions. Ctrl-G/B/V toggle agents/shells/saved; Ctrl-T cycles the history window. Esc on the home screen requests logout (exit code 2). Settings persist under `~/.local/state/agentbox-login/`.
+`/` searches; `p` opens preferences; `o/r` and `c/l` start/resume omp and Claude (Claude gets `--allow-dangerously-skip-permissions`, so bypass mode is in the Shift+Tab cycle but never the default); `s` creates a Zellij shell; `h` exits to Bash. **a** or **Ctrl-J** opens scheduled jobs. Arrows + Enter or mouse clicks open sessions. Ctrl-G/B/V/Y toggle agents/shells/saved/T3; Ctrl-T cycles the history window. Esc on the home screen requests logout (exit code 2). Settings persist under `~/.local/state/agentbox-login/`.
 
-Preferences control Agents, Shells, Saved, Density and History. Saved sessions must also match their Agents/Shells category; all filters may be off. Density cycles **Compact → Tight → Spacious**, with narrow-terminal fallback. History cycles **5m → 15m → 30m → 1h → 6h → 12h → 24h** (default 30m). Search exposes these same five controls above the query: Up/Tab from the query focuses them, Left/Right selects a control, Enter/Space changes it, and Down returns to the query/results. Preferences persist immediately in `~/.local/state/agentbox-login/preferences`.
+Preferences control Agents, Shells, Saved, T3, Density and History. Saved sessions must also match their Agents/Shells category; all filters may be off. Density cycles **Compact → Tight → Spacious**, with narrow-terminal fallback. History cycles **5m → 15m → 30m → 1h → 6h → 12h → 24h** (default 30m). Search exposes these same six controls above the query: Up/Tab from the query focuses them, Left/Right selects a control, Enter/Space changes it, and Down returns to the query/results. Preferences persist immediately in `~/.local/state/agentbox-login/preferences`.
 
 To launch on interactive SSH Bash logins, add this to `~/.bashrc` (with `~/.local/bin` on `PATH`):
 
@@ -65,7 +66,17 @@ bind "Ctrl f" {
 
 Session state and foreground command detection are best-effort; CPU/RSS history is sampled from `/proc`. Snapshots can contain session names, paths and commands: **never publish `~/.local/state/agentbox-login/`**.
 
-`cmd/agentbox-facts` is a separate, host-specific inventory collector, **not required** for the workspace. Its generated Markdown may include private machine/network details; do not commit it. Build it with `go build -p 2 -o ~/.local/bin/agentbox-facts ./cmd/agentbox-facts` only if you want to adapt it for your host.
+## T3 conversations
+
+When `~/.t3/userdata/state.sqlite` exists, the launcher reads it using `sqlite3 -readonly` and includes T3 chats alongside Zellij sessions. Install the `sqlite3` command for this optional integration. Rows show **T3 Codex/Claude**, project and status; search matches title, project, working directory, provider, status, T3 thread ID and provider conversation ID. Archived chats use the Saved filter; deleted chats/projects are excluded. T3 chats have their own persistent visibility filter: **Ctrl-Y / ^Y** toggles them on home and in search, including while typing. Terminal Agents and T3 visibility are independent; archived chats also require Saved. CPU/RSS appears in rows, selected-session statistics, conversation views and search history graphs when a dedicated provider backend can be matched to its open conversation history file or Claude SDK session argument. Readings include that backend and its same-user child processes; T3's shared server is excluded. Shared or unidentifiable provider backends show unavailable readings rather than allocating their usage to a chat. CPU needs a second sample; RSS is available on the first. A failed database refresh retains cached chats and displays an error.
+
+**Enter**, a number shortcut or a second mouse click opens the selected conversation. **↑↓/PgUp/PgDn**, **Home/End** and the mouse wheel scroll the latest 200 messages (up to 64 KiB of text per message). Status and messages refresh every ten seconds; **Ctrl-R** refreshes immediately and **Esc** returns to the list/search with its query intact. Active conversations remain inspectable, including streaming assistant messages and pending-input counts.
+
+From the conversation view, **r** opens an idle Codex or Claude Code conversation in Zellij using the exact persisted provider conversation ID and the thread's worktree/project cwd. The launcher checks the current projected T3 chat status again before opening the CLI (the resume-runtime record can retain a stale running status), blocks running/connecting chats and pending turns/approvals/input, reuses live continuation terminals and avoids resurrecting exited continuation layouts. Missing provider IDs or working directories produce explicit errors. Local provider instances' binary/home settings are honored; managed T3 providers continue through T3. CLI resumes use normal CLI permission defaults.
+
+Terminal continuation uses the provider's local history. New CLI messages stay in that terminal; T3's message projection does not automatically import them. Opening a chat in the launcher does not create a new T3 thread.
+
+`cmd/agentbox-facts` is a separate, host-specific inventory collector, **not required** for the workspace. Its generated Markdown may include private machine/network details; do not commit it. Build it with `go build -p 2 -o ~/.local/bin/agentbox-facts ./cmd/agentbox-facts` only if you want to adapt it for your host. Project inventory includes immediate checkouts under `~/code` and the component directories grouped under `~/code/agentbox` and `~/code/hubsync`.
 
 ## Scheduled jobs
 

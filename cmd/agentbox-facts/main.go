@@ -212,16 +212,29 @@ func sockets(s string) []string {
 	return a
 }
 func projects() []string {
-	dirs, _ := os.ReadDir(filepath.Join(os.Getenv("HOME"), "code"))
-	var a []string
+	root := filepath.Join(os.Getenv("HOME"), "code")
+	dirs, _ := os.ReadDir(root)
+	var names []string
 	for _, d := range dirs {
 		if !d.IsDir() {
 			continue
 		}
-		path := filepath.Join(os.Getenv("HOME"), "code", d.Name())
+		names = append(names, d.Name())
+		if d.Name() == "agentbox" || d.Name() == "hubsync" {
+			children, _ := os.ReadDir(filepath.Join(root, d.Name()))
+			for _, child := range children {
+				if child.IsDir() && !strings.HasPrefix(child.Name(), ".") {
+					names = append(names, filepath.Join(d.Name(), child.Name()))
+				}
+			}
+		}
+	}
+	var a []string
+	for _, name := range names {
+		path := filepath.Join(root, name)
 		ctx := context.Background()
 		if run(ctx, "git", "-C", path, "rev-parse", "--git-dir") == "" {
-			a = append(a, "- "+d.Name()+": not a git repo")
+			a = append(a, "- "+name+": not a git repo")
 			continue
 		}
 		branch := run(ctx, "git", "-C", path, "branch", "--show-current")
@@ -237,7 +250,7 @@ func projects() []string {
 		if last == "" {
 			last = "n/a"
 		}
-		a = append(a, fmt.Sprintf("- %s: git %s, %d uncommitted change(s), last commit %s", d.Name(), branch, dirty, last))
+		a = append(a, fmt.Sprintf("- %s: git %s, %d uncommitted change(s), last commit %s", name, branch, dirty, last))
 	}
 	if len(a) == 0 {
 		return []string{"- none yet"}

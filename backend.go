@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -25,12 +26,14 @@ type Session struct {
 	Used, Created                                     time.Time
 	FromUse                                           bool
 	Metrics                                           SessionMetrics
+	T3                                                *t3Thread `json:",omitempty"`
 	panes                                             []pane
 }
 type Snapshot struct {
 	Sessions []Session
 	At       time.Time
 	Err      string
+	Warning  string
 }
 type Action struct {
 	Verb, Name, PaneID string
@@ -112,6 +115,16 @@ func command(ctx context.Context, limit time.Duration, name string, args ...stri
 	cmd.Env = cleanEnv()
 	return cmd.Output()
 }
+
+// zellijSessions lists sessions; a user who has never started one gets an empty list, not an error.
+func zellijSessions(ctx context.Context, limit time.Duration, args ...string) ([]byte, error) {
+	data, err := command(ctx, limit, "zellij", append([]string{"list-sessions"}, args...)...)
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && strings.Contains(string(exit.Stderr), "No active zellij sessions") {
+		return nil, nil
+	}
+	return data, err
+}
 func cleanEnv() []string {
 	env := make([]string, 0, len(os.Environ()))
 	for _, item := range os.Environ() {
@@ -155,7 +168,7 @@ func (p pane) cmd() string {
 	return p.TerminalCommand
 }
 
-var agentCommand = regexp.MustCompile(`(?:^|/)\b(omp|claude)(?:\s|$)`)
+var agentCommand = regexp.MustCompile(`(?:^|/)\b(omp|claude|codex)(?:\s|$)`)
 var nameCreation = regexp.MustCompile(`^(?:omp|claude|shell)-([0-9]{8})-([0-9]{6})-`)
 var runningTitle = regexp.MustCompile(`^π [⠁-⣿]`)
 var layoutCwd = regexp.MustCompile(`cwd(?:=|\s+)"([^"]+)"`)
@@ -215,6 +228,8 @@ func savedMetadata(s *Session) {
 		s.Kind = "omp"
 	case strings.Contains(layout, `pane command="claude"`):
 		s.Kind = "claude"
+	case strings.Contains(layout, `pane command="codex"`):
+		s.Kind = "codex"
 	case strings.HasPrefix(s.Name, "omp-") || s.Name == "agentbox":
 		s.Kind = "omp"
 	case strings.HasPrefix(s.Name, "claude-"):
@@ -364,10 +379,7 @@ func inspect(ctx context.Context, s Session) Session {
 	return s
 }
 func collect(ctx context.Context) Snapshot {
-	data, err := command(ctx, 3*time.Second, "zellij", "list-sessions", "--reverse", "--no-formatting")
-	if err != nil {
-		return Snapshot{Err: "Zellij unavailable"}
-	}
+	data, zellijErr := zellijSessions(ctx, 3*time.Second, "--reverse", "--no-formatting")
 	var sessions []Session
 	for _, line := range strings.Split(string(data), "\n") {
 		name, _, ok := strings.Cut(line, " [Created")
@@ -391,6 +403,17 @@ func collect(ctx context.Context) Snapshot {
 		go func(i int, s Session) { defer wg.Done(); slots <- struct{}{}; out[i] = inspect(ctx, s); <-slots }(i, s)
 	}
 	wg.Wait()
+	t3, err := collectT3(ctx)
+	if err != nil {
+		// Retain chats through a transient database failure without hiding Zellij.
+		for _, s := range loadCache().Sessions {
+			if s.T3 != nil {
+				out = append(out, s)
+			}
+		}
+	} else {
+		out = append(out, t3...)
+	}
 	populateMetrics(out)
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Saved != out[j].Saved {
@@ -398,9 +421,23 @@ func collect(ctx context.Context) Snapshot {
 		}
 		return out[i].Used.After(out[j].Used)
 	})
-	return Snapshot{Sessions: out, At: time.Now()}
+	snapshot := Snapshot{Sessions: out, At: time.Now()}
+	if err != nil {
+		snapshot.Warning = "T3 unavailable: " + err.Error()
+	}
+	if zellijErr != nil {
+		if len(out) == 0 {
+			snapshot.Err = "Zellij unavailable"
+		} else {
+			snapshot.Warning = strings.TrimSpace(snapshot.Warning + " Zellij unavailable")
+		}
+	}
+	return snapshot
 }
 func runAction(a Action) error {
+	if a.Verb == "t3-resume" {
+		return resumeT3(a.Name)
+	}
 	if a.Verb == "scheduled-join" {
 		return joinScheduledRun(a.Name)
 	}
@@ -439,7 +476,7 @@ func runAction(a Action) error {
 		kind := strings.SplitN(a.Verb, "-", 2)[0]
 		if strings.HasSuffix(a.Verb, "-last") {
 			// A cached row can outlive its Zellij server; never attach to a stale name.
-			if live, err := command(context.Background(), 2*time.Second, "zellij", "list-sessions", "--reverse", "--no-formatting"); err == nil {
+			if live, err := zellijSessions(context.Background(), 2*time.Second, "--reverse", "--no-formatting"); err == nil {
 				for _, s := range loadCache().Sessions {
 					if s.Saved || s.Kind != kind {
 						continue
@@ -458,6 +495,10 @@ func runAction(a Action) error {
 			commandName = "bash"
 		}
 		args = []string{"attach", "--create", name, "--", commandName}
+		if kind == "claude" {
+			// Makes bypass mode reachable via Shift+Tab; sessions still start in default mode.
+			args = append(args, "--allow-dangerously-skip-permissions")
+		}
 		if strings.HasSuffix(a.Verb, "-last") {
 			args = append(args, "--continue")
 		}

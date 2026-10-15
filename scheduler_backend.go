@@ -217,7 +217,7 @@ func joinScheduledRun(runID string) error {
 	if detail.Run.Runner == "command" && detail.Run.Status != "running" && !detail.Run.hasWrappedSession() {
 		return fmt.Errorf("command runs have no agent session; view their logs instead")
 	}
-	listing, err := command(context.Background(), 2*time.Second, "zellij", "list-sessions", "--no-formatting")
+	listing, err := zellijSessions(context.Background(), 2*time.Second, "--no-formatting")
 	if err != nil {
 		exit, ok := err.(*exec.ExitError)
 		if !ok || (!strings.Contains(string(exit.Stderr), "No active zellij sessions") && !strings.Contains(string(listing), "No active zellij sessions")) {
